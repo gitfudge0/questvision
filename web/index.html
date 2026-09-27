@@ -1,0 +1,797 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101511">
+  <title>Quest Display</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: oklch(18% 0.014 155);
+      --panel: oklch(24% 0.015 155);
+      --panel-strong: oklch(29% 0.017 155);
+      --line: oklch(42% 0.017 155);
+      --text: oklch(94% 0.01 100);
+      --muted: oklch(72% 0.012 130);
+      --accent: oklch(82% 0.14 135);
+      --accent-ink: oklch(20% 0.03 135);
+      --warn: oklch(78% 0.14 70);
+      --error: oklch(72% 0.17 25);
+      font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+      font-synthesis: none;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
+    body { min-height: 100dvh; overflow-x: hidden; }
+    button, select, input { font: inherit; }
+    button, select { cursor: pointer; }
+    button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 3px;
+    }
+    button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity: .52; }
+    button { min-height: 46px; border-radius: 10px; border: 1px solid var(--line); color: var(--text); background: var(--panel-strong); padding: 10px 16px; }
+    button:hover:not(:disabled), select:hover:not(:disabled) { background: oklch(34% 0.019 155); }
+    button:active:not(:disabled) { transform: translateY(1px); }
+    .primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
+    .primary:hover:not(:disabled) { background: oklch(89% 0.13 135); }
+    .quiet { background: transparent; }
+    .danger { color: var(--error); }
+    .app { min-height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+    .topbar { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 15px clamp(16px, 3vw, 44px); border-bottom: 1px solid var(--line); }
+    .brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
+    .brand-mark { position: relative; width: 30px; height: 26px; flex: 0 0 auto; border: 2px solid var(--accent); border-radius: 5px; transform: skewX(-8deg); }
+    .brand-mark::after { content: ""; position: absolute; width: 8px; height: 2px; background: var(--accent); left: 9px; bottom: -7px; }
+    .brand-name { font-size: clamp(17px, 2vw, 20px); font-weight: 760; letter-spacing: -.035em; white-space: nowrap; }
+    .brand-sub { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .16em; margin-top: 2px; }
+    .connection { display: flex; align-items: center; gap: 11px; min-width: 0; color: var(--muted); font-size: 13px; }
+    .light { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--line); box-shadow: 0 0 0 4px oklch(42% 0.017 155 / .15); }
+    .light[data-state="live"] { background: var(--accent); box-shadow: 0 0 0 4px oklch(82% 0.14 135 / .14); }
+    .light[data-state="busy"] { background: var(--warn); box-shadow: 0 0 0 4px oklch(78% 0.14 70 / .14); }
+    .light[data-state="error"] { background: var(--error); box-shadow: 0 0 0 4px oklch(72% 0.17 25 / .14); }
+    .stage { position: relative; min-height: 330px; display: grid; place-items: center; overflow: hidden; background: oklch(13% 0.011 155); }
+    .stage::before { content: ""; position: absolute; inset: 0; pointer-events: none; background-image: linear-gradient(oklch(80% 0.02 155 / .025) 1px, transparent 1px), linear-gradient(90deg, oklch(80% 0.02 155 / .025) 1px, transparent 1px); background-size: 48px 48px; mask-image: linear-gradient(to bottom, transparent, black 30%, black 70%, transparent); }
+    video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: oklch(10% 0.009 155); display: none; }
+    .stage.is-playing video { display: block; }
+    .stage.is-playing::before { display: none; }
+    .welcome { z-index: 1; width: min(100% - 32px, 490px); margin: 32px auto; padding: clamp(22px, 4vw, 36px); border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: 0 20px 80px oklch(4% 0.01 155 / .32); }
+    .stage.is-playing .welcome { display: none; }
+    .eyebrow { color: var(--accent); font: 700 11px ui-monospace, "SFMono-Regular", Consolas, monospace; text-transform: uppercase; letter-spacing: .16em; }
+    h1 { margin: 14px 0 12px; font-size: clamp(27px, 5vw, 39px); letter-spacing: -.055em; line-height: 1.09; font-weight: 730; }
+    .welcome p { margin: 0 0 22px; color: var(--muted); line-height: 1.55; max-width: 43ch; }
+    .step { font: 700 11px ui-monospace, "SFMono-Regular", Consolas, monospace; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: 9px; }
+    .pair-actions { display: flex; gap: 10px; align-items: stretch; }
+    .pair-actions input { width: 100%; min-width: 0; min-height: 50px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line); color: var(--text); background: var(--bg); font: 600 21px ui-monospace, "SFMono-Regular", Consolas, monospace; letter-spacing: .14em; }
+    .pair-actions input::placeholder { font-size: 14px; letter-spacing: .02em; font-weight: 400; color: var(--muted); }
+    .pair-actions button { white-space: nowrap; }
+    .help { margin-top: 13px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+    .message { min-height: 21px; margin-top: 17px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .message.error { color: var(--error); }
+    .message.good { color: var(--accent); }
+    .play-gate { position: absolute; z-index: 2; display: none; max-width: min(90%, 360px); text-align: center; padding: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: 0 18px 65px oklch(4% 0.01 155 / .5); }
+    .play-gate.visible { display: block; }
+    .play-gate p { margin: 0 0 15px; color: var(--muted); }
+    .dock { display: grid; gap: 14px; padding: 17px clamp(16px, 3vw, 44px) max(17px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--bg); }
+    .dock-main { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 22px; }
+    .dock-left, .dock-right { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .field { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    select { min-height: 46px; min-width: 145px; max-width: min(44vw, 250px); padding: 9px 34px 9px 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--panel-strong); }
+    .mini-stats { display: flex; align-items: baseline; gap: 19px; white-space: nowrap; }
+    .mini-stats span { display: inline-flex; align-items: baseline; gap: 5px; font: 650 13px ui-monospace, "SFMono-Regular", Consolas, monospace; }
+    .mini-stats small { color: var(--muted); font: 11px "Avenir Next", "Segoe UI", system-ui, sans-serif; }
+    details { border-top: 1px solid var(--line); padding-top: 12px; }
+    summary { width: fit-content; min-height: 40px; display: flex; align-items: center; cursor: pointer; color: var(--muted); font-size: 13px; }
+    summary:hover { color: var(--text); }
+    .diagnostics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px 20px; padding: 12px 0 4px; }
+    .diagnostics div { min-width: 0; }
+    .diagnostics dt { color: var(--muted); font-size: 11px; margin-bottom: 5px; }
+    .diagnostics dd { margin: 0; font: 600 13px ui-monospace, "SFMono-Regular", Consolas, monospace; overflow-wrap: anywhere; }
+    .footnote { color: var(--muted); font-size: 11px; line-height: 1.5; margin: 5px 0 0; }
+    .quality { display: none; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .quality.visible { display: flex; }
+    .quality label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
+    .quality select { min-width: 105px; }
+    .xr-controls { display: none; flex-wrap: wrap; align-items: center; gap: 9px; border-top: 1px solid var(--line); padding-top: 13px; }
+    .xr-controls.visible { display: flex; }
+    .xr-controls button { min-height: 44px; }
+    .xr-controls .hint { flex-basis: 100%; margin: 1px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .xr-readout { min-width: 66px; color: var(--muted); font: 12px ui-monospace, "SFMono-Regular", Consolas, monospace; text-align: center; }
+    .xr-overlay { position: fixed; z-index: 10; inset: auto 12px max(12px, env(safe-area-inset-bottom)) 12px; display: none; justify-content: center; flex-wrap: wrap; gap: 8px; padding: 10px; border-radius: 13px; background: oklch(18% 0.014 155 / .92); }
+    .xr-overlay.active { display: flex; }
+    .xr-overlay button { min-height: 46px; }
+    .xr-overlay [data-xr-action="exit"] { color: var(--error); }
+    .stage:fullscreen { background: oklch(7% 0.008 155); }
+    .stage:fullscreen video { display: block; }
+    .stage:fullscreen .welcome { display: none; }
+    .stage:fullscreen:not(.is-playing) video { display: none; }
+    @media (max-width: 700px) {
+      .topbar { min-height: 64px; }
+      .brand-sub { display: none; }
+      .stage { min-height: 400px; }
+      .dock-main { align-items: stretch; }
+      .dock-left { width: 100%; }
+      .dock-left .field { flex: 1; }
+      .dock-left select { flex: 1; max-width: none; }
+      .dock-right { justify-content: space-between; width: 100%; }
+      .mini-stats { gap: 12px; }
+    }
+    @media (max-width: 420px) {
+      .pair-actions { flex-direction: column; }
+      .connection { font-size: 12px; }
+      .mini-stats span:last-child { display: none; }
+      .dock-right button { padding-inline: 12px; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span><div><div class="brand-name">Quest Display</div><div class="brand-sub">Local screen stream</div></div></div>
+      <div class="connection" role="status" aria-live="polite"><span class="light" id="status-light"></span><span id="status-text">Starting</span></div>
+    </header>
+    <section class="stage" id="stage" aria-label="Desktop stream">
+      <video id="video" autoplay playsinline muted aria-label="Remote desktop"></video>
+      <div class="welcome" id="welcome">
+        <div class="eyebrow">Private LAN connection</div>
+        <h1 id="welcome-title">Your computer, in view.</h1>
+        <p id="welcome-copy">Pair this browser with Quest Display on your computer to start streaming.</p>
+        <div id="pair-ui">
+          <div class="step">Pair this browser</div>
+          <div class="pair-actions"><input id="pair-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="16" placeholder="Code shown on your computer" aria-label="Pairing code"><button id="pair-button" class="primary" type="button">Pair</button></div>
+          <div class="help">The code appears in the Quest Display terminal on your computer. Pairing grants this browser view access.</div>
+        </div>
+        <div class="message" id="message" role="status" aria-live="polite"></div>
+        <button id="retry-button" type="button" hidden>Try again</button>
+      </div>
+      <div class="play-gate" id="play-gate"><p>The browser paused video playback.</p><button id="play-button" class="primary" type="button">Play stream</button></div>
+    </section>
+    <footer class="dock">
+      <div class="dock-main">
+        <div class="dock-left"><label class="field" for="display-select">Display <select id="display-select" disabled><option>Waiting for pairing</option></select></label><div class="mini-stats" aria-label="Live connection statistics"><span><strong id="mini-fps">—</strong><small>fps</small></span><span><strong id="mini-bitrate">—</strong><small>Mbps</small></span><span><strong id="mini-rtt">—</strong><small>ms RTT</small></span></div></div>
+        <div class="dock-right"><button id="audio-button" type="button" hidden>Enable audio</button><button id="reconnect-button" type="button" disabled>Reconnect</button><button id="xr-button" type="button" hidden disabled>Enter XR</button><button id="fullscreen-button" class="primary" type="button" disabled>Fullscreen</button></div>
+      </div>
+      <div class="quality" id="quality-controls"><label>Quality<select id="quality-select"><option value="balanced">Balanced</option><option value="performance">Performance</option><option value="quality">Quality</option></select></label><label>Frame rate<select id="fps-select"><option value="60">60 fps</option><option value="45">45 fps</option><option value="30">30 fps</option><option value="90">90 fps</option></select></label><label>Bitrate<select id="bitrate-select"><option value="auto">Auto</option><option value="10">10 Mbps</option><option value="20">20 Mbps</option><option value="35">35 Mbps</option><option value="50">50 Mbps</option></select></label></div>
+      <div class="xr-controls" id="xr-controls"><span class="eyebrow">Experimental XR screen</span><button type="button" data-xr-action="nearer" aria-label="Move XR screen closer">Closer</button><button type="button" data-xr-action="farther" aria-label="Move XR screen farther">Farther</button><span class="xr-readout" id="xr-distance">1.8 m</span><button type="button" data-xr-action="smaller" aria-label="Make XR screen smaller">Smaller</button><button type="button" data-xr-action="larger" aria-label="Make XR screen larger">Larger</button><span class="xr-readout" id="xr-scale">100%</span><button type="button" data-xr-action="curve">Curved</button><button type="button" data-xr-action="recenter">Recenter</button><p class="hint">View only. In XR, the controller trigger recenters the screen. Thumbstick left/right changes size; up/down changes distance. Browser support varies.</p></div>
+      <details id="diagnostics"><summary>Connection diagnostics</summary><dl class="diagnostics"><div><dt>Codec</dt><dd id="diag-codec">—</dd></div><div><dt>Audio codec</dt><dd id="diag-audio-codec">Off</dd></div><div><dt>Resolution</dt><dd id="diag-resolution">—</dd></div><div><dt>Decode rate</dt><dd id="diag-fps">—</dd></div><div><dt>Received bitrate</dt><dd id="diag-bitrate">—</dd></div><div><dt>Round trip time</dt><dd id="diag-rtt">—</dd></div><div><dt>Packet loss</dt><dd id="diag-loss">—</dd></div><div><dt>Dropped frames</dt><dd id="diag-dropped">—</dd></div><div><dt>Jitter</dt><dd id="diag-jitter">—</dd></div><div><dt>Connection</dt><dd id="diag-connection">Idle</dd></div><div><dt>Secure context</dt><dd id="diag-secure">—</dd></div></dl><p class="footnote">RTT is network round trip time, not screen to eye latency. Capture and encode timings require host diagnostics.</p></details>
+    </footer>
+  </main>
+  <div class="xr-overlay" id="xr-overlay" aria-label="XR screen controls"><button type="button" data-xr-action="nearer">Closer</button><button type="button" data-xr-action="farther">Farther</button><button type="button" data-xr-action="smaller">Smaller</button><button type="button" data-xr-action="larger">Larger</button><button type="button" data-xr-action="curve">Curved</button><button type="button" data-xr-action="recenter">Recenter</button><button type="button" data-xr-action="exit">Exit XR</button></div>
+  <script>
+  (() => {
+    'use strict';
+
+    const $ = (id) => document.getElementById(id);
+    const ui = {
+      stage: $('stage'), video: $('video'), light: $('status-light'), status: $('status-text'), title: $('welcome-title'), copy: $('welcome-copy'),
+      pairUi: $('pair-ui'), pairCode: $('pair-code'), pairButton: $('pair-button'), message: $('message'), retry: $('retry-button'),
+      display: $('display-select'), audio: $('audio-button'), reconnect: $('reconnect-button'), fullscreen: $('fullscreen-button'), playGate: $('play-gate'), play: $('play-button'),
+      quality: $('quality-controls'), qualitySelect: $('quality-select'), fpsSelect: $('fps-select'), bitrateSelect: $('bitrate-select'),
+      xrButton: $('xr-button'), xrControls: $('xr-controls'), xrOverlay: $('xr-overlay'), xrDistance: $('xr-distance'), xrScale: $('xr-scale')
+    };
+    const storeKey = 'questdisplay.device_token.v1';
+    const state = { token: null, requestId: null, pc: null, stream: null, audioTrack: null, audioRequested: false, connectSerial: 0, reconnectTimer: null, statsTimer: null, statsPrev: null, failures: 0, controls: false, stop: false, status: null,
+      xrSupported: false, xrMode: null, xr: null, xrDistance: 1.8, xrScale: 1, xrCurved: false };
+
+    try { state.token = localStorage.getItem(storeKey); } catch (_) { /* Storage may be disabled. Pairing still works for this tab. */ }
+
+    function setStatus(label, kind = '') {
+      ui.status.textContent = label;
+      ui.light.dataset.state = kind;
+      $('diag-connection').textContent = label;
+    }
+    function setMessage(message, kind = '') {
+      ui.message.textContent = message;
+      ui.message.className = `message ${kind}`;
+    }
+    function setWelcome(title, copy) { ui.title.textContent = title; ui.copy.textContent = copy; }
+    function showPairing(show) { ui.pairUi.hidden = !show; }
+    function setLive(live) {
+      ui.stage.classList.toggle('is-playing', live);
+      ui.fullscreen.disabled = !live || !document.fullscreenEnabled;
+      ui.xrButton.disabled = !live || !state.xrSupported;
+    }
+    function formatError(error) { return error instanceof Error ? error.message : String(error); }
+    async function request(path, { method = 'GET', body, auth = false, timeout = 12000 } = {}) {
+      const headers = { 'Accept': 'application/json' };
+      if (body !== undefined) headers['Content-Type'] = 'application/json';
+      if (auth) {
+        if (!state.token) throw new Error('This browser is not paired.');
+        headers.Authorization = `Bearer ${state.token}`;
+      }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeout);
+      try {
+        const response = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal, cache: 'no-store', credentials: 'omit' });
+        let data = null;
+        try { data = await response.json(); } catch (_) { /* Error responses may have no JSON body. */ }
+        if (!response.ok) {
+          const err = new Error(data?.error || data?.message || `Server returned ${response.status}.`);
+          err.status = response.status;
+          throw err;
+        }
+        return data;
+      } catch (error) {
+        if (error.name === 'AbortError') throw new Error('The server did not respond in time.');
+        throw error;
+      } finally { clearTimeout(timer); }
+    }
+    function forgetPairing() {
+      state.token = null;
+      state.audioRequested = false;
+      try { localStorage.removeItem(storeKey); } catch (_) { /* In-memory state is cleared. */ }
+      cleanup();
+      setLive(false);
+      showPairing(true);
+      ui.display.disabled = true;
+      ui.reconnect.disabled = true;
+      ui.retry.hidden = true;
+      setWelcome('Pair this browser.', 'Enter the code shown by Quest Display on your computer.');
+    }
+    async function loadStatus() {
+      try {
+        state.status = await request('/api/status', { timeout: 5000 });
+        state.controls = state.status?.quality_controls === true;
+        ui.quality.classList.toggle('visible', state.controls);
+        ui.audio.hidden = state.status?.audio !== true;
+        ui.audio.disabled = state.status?.audio === true;
+        ui.audio.textContent = state.status?.audio === true ? 'Waiting for audio' : 'Enable audio';
+        textValue('diag-audio-codec', state.status?.audio === true ? 'Waiting' : 'Off');
+        if (state.status?.codec) $('diag-codec').textContent = state.status.codec;
+      } catch (_) { state.controls = false; ui.quality.classList.remove('visible'); }
+    }
+    async function startPairing() {
+      setStatus('Waiting for pairing', 'busy');
+      setMessage('Requesting a code from the host…');
+      ui.pairButton.disabled = true;
+      try {
+        const result = await request('/api/pair/start', { method: 'POST', body: {} });
+        if (!result?.request_id) throw new Error('The server did not return a pairing request.');
+        state.requestId = result.request_id;
+        setMessage('Read the code in the Quest Display terminal and enter it here.');
+        ui.pairCode.focus();
+      } catch (error) {
+        setStatus('Host unavailable', 'error');
+        setMessage(formatError(error), 'error');
+        ui.retry.hidden = false;
+      } finally { ui.pairButton.disabled = false; }
+    }
+    async function confirmPairing() {
+      const code = ui.pairCode.value.replace(/\s+/g, '');
+      if (!code) { setMessage('Enter the code shown on your computer.', 'error'); ui.pairCode.focus(); return; }
+      ui.pairButton.disabled = true;
+      setMessage('Checking code…');
+      try {
+        if (!state.requestId) await startPairing();
+        if (!state.requestId) return;
+        const result = await request('/api/pair/confirm', { method: 'POST', body: { request_id: state.requestId, code } });
+        if (!result?.token) throw new Error('The server did not return a device credential.');
+        state.token = result.token;
+        state.requestId = null;
+        ui.pairCode.value = '';
+        try { localStorage.setItem(storeKey, state.token); } catch (_) { setMessage('Paired for this tab. Browser storage is unavailable.', 'good'); }
+        await afterPairing();
+      } catch (error) {
+        setStatus('Pairing failed', 'error');
+        setMessage(formatError(error), 'error');
+      } finally { ui.pairButton.disabled = false; }
+    }
+    async function afterPairing() {
+      showPairing(false);
+      ui.retry.hidden = true;
+      setWelcome('Connecting to your desktop.', 'The stream will appear here when the connection is ready.');
+      setMessage('Loading displays…');
+      try {
+        await loadDisplays();
+        await connect();
+      } catch (error) {
+        if (error.status === 401 || error.status === 403) { forgetPairing(); setMessage('Pairing expired or was revoked. Enter a new code.', 'error'); await startPairing(); return; }
+        failConnection(error);
+      }
+    }
+    async function loadDisplays() {
+      const result = await request('/api/displays', { auth: true });
+      const displays = Array.isArray(result) ? result : result?.displays;
+      if (!Array.isArray(displays) || displays.length === 0) throw new Error('No displays are available on the host. Check screen capture permission.');
+      const old = ui.display.value;
+      ui.display.replaceChildren();
+      for (const item of displays) {
+        const option = document.createElement('option');
+        option.value = String(item.id ?? item.display_id ?? '');
+        option.textContent = String(item.name ?? item.label ?? option.value ?? 'Display');
+        ui.display.append(option);
+      }
+      if ([...ui.display.options].some(option => option.value === old)) ui.display.value = old;
+      ui.display.disabled = displays.length < 2;
+      ui.reconnect.disabled = false;
+    }
+    function cleanup() {
+      if (state.xr) state.xr.session.end().catch(() => {});
+      clearTimeout(state.reconnectTimer);
+      clearInterval(state.statsTimer);
+      state.reconnectTimer = null;
+      state.statsTimer = null;
+      state.statsPrev = null;
+      state.connectSerial++;
+      const pc = state.pc;
+      state.pc = null;
+      if (pc) { pc.ontrack = null; pc.onconnectionstatechange = null; pc.close(); }
+      ui.video.pause();
+      ui.video.muted = true;
+      ui.video.srcObject = null;
+      state.stream = null;
+      state.audioTrack = null;
+      if (state.status?.audio === true) { ui.audio.disabled = true; ui.audio.textContent = 'Waiting for audio'; textValue('diag-audio-codec', 'Waiting'); }
+      ui.playGate.classList.remove('visible');
+    }
+    function waitForIce(pc, limit = 9000) {
+      if (pc.iceGatheringState === 'complete') return Promise.resolve();
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { pc.removeEventListener('icegatheringstatechange', changed); reject(new Error('Local network candidate gathering timed out.')); }, limit);
+        function changed() { if (pc.iceGatheringState === 'complete') { clearTimeout(timer); pc.removeEventListener('icegatheringstatechange', changed); resolve(); } }
+        pc.addEventListener('icegatheringstatechange', changed);
+      });
+    }
+    async function playVideo() {
+      try {
+        await ui.video.play();
+        ui.playGate.classList.remove('visible');
+        setLive(true);
+        if (state.audioRequested && state.audioTrack && ui.video.muted) enableAudioPlayback();
+      } catch (_) {
+        if (!ui.video.muted) {
+          ui.video.muted = true;
+          state.audioRequested = false;
+          ui.audio.textContent = 'Enable audio';
+          try { await ui.video.play(); ui.playGate.classList.remove('visible'); setLive(true); setMessage('The browser blocked sound after reconnect. Tap Enable audio.', 'error'); return; }
+          catch (_) { /* A direct play gesture may still be required. */ }
+        }
+        ui.playGate.classList.add('visible');
+        setMessage('Tap Play stream to allow video playback.');
+      }
+    }
+    async function enableAudioPlayback() {
+      if (!state.audioTrack || !state.stream) return;
+      const stream = state.stream;
+      ui.video.muted = false;
+      try {
+        await ui.video.play();
+        if (state.stream !== stream) return;
+        state.audioRequested = true;
+        ui.audio.textContent = 'Mute audio';
+        setMessage('');
+      } catch (_) {
+        if (state.stream !== stream) return;
+        ui.video.muted = true;
+        state.audioRequested = false;
+        ui.audio.textContent = 'Enable audio';
+        await playVideo();
+        setMessage('The browser blocked sound. Tap Enable audio again.', 'error');
+      }
+    }
+    async function connect() {
+      cleanup();
+      const serial = state.connectSerial;
+      setLive(false);
+      setStatus('Connecting', 'busy');
+      setMessage('Negotiating a local WebRTC connection…');
+      const pc = new RTCPeerConnection({ iceServers: [], bundlePolicy: 'max-bundle' });
+      state.pc = pc;
+      const stream = new MediaStream();
+      state.stream = stream;
+      ui.video.srcObject = stream;
+      const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
+      if (typeof videoTransceiver.setCodecPreferences === 'function' && typeof RTCRtpReceiver !== 'undefined' && typeof RTCRtpReceiver.getCapabilities === 'function') {
+        try {
+          const codecs = RTCRtpReceiver.getCapabilities('video')?.codecs || [];
+          const h264 = codecs.filter(codec => codec.mimeType?.toLowerCase() === 'video/h264');
+          if (h264.length) videoTransceiver.setCodecPreferences([...h264, ...codecs.filter(codec => codec.mimeType?.toLowerCase() !== 'video/h264')]);
+        } catch (_) { /* Keep the browser's default codec order if preferences are rejected. */ }
+      }
+      if (state.status?.audio === true) {
+        const audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
+        if (typeof audioTransceiver.setCodecPreferences === 'function' && typeof RTCRtpReceiver !== 'undefined' && typeof RTCRtpReceiver.getCapabilities === 'function') {
+          try {
+            const codecs = RTCRtpReceiver.getCapabilities('audio')?.codecs || [];
+            const opus = codecs.filter(codec => codec.mimeType?.toLowerCase() === 'audio/opus');
+            if (opus.length) audioTransceiver.setCodecPreferences([...opus, ...codecs.filter(codec => codec.mimeType?.toLowerCase() !== 'audio/opus')]);
+          } catch (_) { /* Keep browser defaults if codec preferences are rejected. */ }
+        }
+      }
+      pc.ontrack = (event) => {
+        if (serial !== state.connectSerial) return;
+        stream.addTrack(event.track);
+        if (event.track.kind === 'audio') {
+          state.audioTrack = event.track;
+          ui.audio.disabled = false;
+          ui.audio.textContent = state.audioRequested ? 'Mute audio' : 'Enable audio';
+          textValue('diag-audio-codec', 'Negotiating');
+          event.track.onended = () => {
+            if (serial !== state.connectSerial) return;
+            state.audioTrack = null;
+            state.audioRequested = false;
+            ui.video.muted = true;
+            ui.audio.disabled = true;
+            ui.audio.textContent = 'Audio unavailable';
+            textValue('diag-audio-codec', 'Unavailable');
+          };
+          if (state.audioRequested && ui.stage.classList.contains('is-playing')) enableAudioPlayback();
+        } else if (event.track.kind === 'video') {
+          event.track.onunmute = () => { if (serial === state.connectSerial) playVideo(); };
+          if (!event.track.muted) playVideo();
+        }
+      };
+      pc.onconnectionstatechange = () => {
+        if (serial !== state.connectSerial) return;
+        const status = pc.connectionState;
+        if (status === 'connected') {
+          state.failures = 0;
+          setStatus('Streaming', 'live');
+          setMessage('');
+          ui.reconnect.disabled = false;
+          startStats(pc, serial);
+        } else if (status === 'failed' || status === 'disconnected') {
+          failConnection(new Error(status === 'failed' ? 'The WebRTC connection failed.' : 'The connection was interrupted.'));
+        }
+      };
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await waitForIce(pc);
+        if (serial !== state.connectSerial) return;
+        const body = { type: 'offer', sdp: pc.localDescription.sdp, display_id: ui.display.value };
+        if (state.controls) {
+          body.quality = ui.qualitySelect.value;
+          body.fps = Number(ui.fpsSelect.value);
+          if (ui.bitrateSelect.value !== 'auto') body.bitrate_mbps = Number(ui.bitrateSelect.value);
+        }
+        const answer = await request('/api/offer', { method: 'POST', auth: true, body, timeout: 120000 });
+        if (serial !== state.connectSerial) return;
+        if (!answer?.sdp || (answer.type && answer.type !== 'answer')) throw new Error('The host returned an invalid WebRTC answer.');
+        await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
+        if (serial !== state.connectSerial) return;
+        setMessage('Waiting for the first frame…');
+      } catch (error) {
+        if (serial !== state.connectSerial) return;
+        if (error.status === 401 || error.status === 403) { forgetPairing(); setMessage('Pairing expired or was revoked. Enter a new code.', 'error'); await startPairing(); return; }
+        failConnection(error);
+      }
+    }
+    function failConnection(error) {
+      if (!state.token || state.stop) return;
+      setLive(false);
+      setStatus('Reconnecting', 'error');
+      setWelcome('Connection interrupted.', 'Quest Display is trying to reconnect to your computer.');
+      setMessage(formatError(error), 'error');
+      ui.retry.hidden = false;
+      cleanup();
+      const delay = Math.min(15000, 1000 * 2 ** Math.min(state.failures++, 4));
+      state.reconnectTimer = setTimeout(() => { if (state.token && !state.stop && !document.hidden) afterPairing(); }, delay);
+    }
+    function textValue(id, value) { $(id).textContent = value; }
+    function startStats(pc, serial) {
+      clearInterval(state.statsTimer);
+      state.statsPrev = null;
+      state.statsTimer = setInterval(async () => {
+        if (serial !== state.connectSerial || pc.connectionState !== 'connected') return;
+        try {
+          const report = await pc.getStats();
+          let inbound = null, audioInbound = null, pair = null, codec = null;
+          report.forEach(item => {
+            if (item.type === 'inbound-rtp' && item.kind === 'video' && !item.isRemote) inbound = item;
+            if (item.type === 'inbound-rtp' && item.kind === 'audio' && !item.isRemote) audioInbound = item;
+            if (item.type === 'candidate-pair' && item.state === 'succeeded' && (item.nominated || item.selected)) pair = item;
+          });
+          if (!inbound) return;
+          if (inbound.codecId) codec = report.get(inbound.codecId);
+          if (audioInbound?.codecId) textValue('diag-audio-codec', report.get(audioInbound.codecId)?.mimeType?.replace('audio/', '') || 'Unknown');
+          const previous = state.statsPrev;
+          const seconds = previous ? (inbound.timestamp - previous.timestamp) / 1000 : 0;
+          const bitrate = seconds > 0 ? (8 * (inbound.bytesReceived - previous.bytesReceived) / seconds / 1e6) : null;
+          const fps = seconds > 0 && inbound.framesDecoded != null && previous.framesDecoded != null ? (inbound.framesDecoded - previous.framesDecoded) / seconds : inbound.framesPerSecond;
+          state.statsPrev = { timestamp: inbound.timestamp, bytesReceived: inbound.bytesReceived, framesDecoded: inbound.framesDecoded };
+          const rtt = pair?.currentRoundTripTime != null ? pair.currentRoundTripTime * 1000 : null;
+          const width = inbound.frameWidth || ui.video.videoWidth;
+          const height = inbound.frameHeight || ui.video.videoHeight;
+          textValue('mini-fps', Number.isFinite(fps) ? Math.round(fps) : '—');
+          textValue('mini-bitrate', Number.isFinite(bitrate) ? bitrate.toFixed(1) : '—');
+          textValue('mini-rtt', Number.isFinite(rtt) ? Math.round(rtt) : '—');
+          textValue('diag-codec', codec?.mimeType?.replace('video/', '') || state.status?.codec || '—');
+          textValue('diag-resolution', width && height ? `${width} × ${height}` : '—');
+          textValue('diag-fps', Number.isFinite(fps) ? `${fps.toFixed(1)} fps` : '—');
+          textValue('diag-bitrate', Number.isFinite(bitrate) ? `${bitrate.toFixed(1)} Mbps` : '—');
+          textValue('diag-rtt', Number.isFinite(rtt) ? `${Math.round(rtt)} ms` : '—');
+          textValue('diag-loss', inbound.packetsLost != null ? `${inbound.packetsLost} packets` : '—');
+          textValue('diag-dropped', inbound.framesDropped != null ? `${inbound.framesDropped} frames` : '—');
+          textValue('diag-jitter', inbound.jitter != null ? `${Math.round(inbound.jitter * 1000)} ms` : '—');
+        } catch (_) { /* A closed peer can race with this interval. */ }
+      }, 1000);
+    }
+
+    function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
+    function updateXRLabels() {
+      ui.xrDistance.textContent = `${state.xrDistance.toFixed(1)} m`;
+      ui.xrScale.textContent = `${Math.round(state.xrScale * 100)}%`;
+      document.querySelectorAll('[data-xr-action="curve"]').forEach(button => { button.textContent = state.xrCurved ? 'Flat' : 'Curved'; });
+    }
+    function xrAction(action) {
+      if (action === 'nearer') state.xrDistance = clamp(state.xrDistance - 0.2, 0.8, 3.5);
+      if (action === 'farther') state.xrDistance = clamp(state.xrDistance + 0.2, 0.8, 3.5);
+      if (action === 'smaller') state.xrScale = clamp(state.xrScale - 0.1, 0.6, 2.2);
+      if (action === 'larger') state.xrScale = clamp(state.xrScale + 0.1, 0.6, 2.2);
+      if (action === 'curve') { state.xrCurved = !state.xrCurved; if (state.xr) state.xr.meshAspect = null; }
+      if (action === 'recenter' && state.xr) recenterXR(state.xr.lastPose);
+      if (action === 'exit' && state.xr) state.xr.session.end().catch(() => {});
+      updateXRLabels();
+    }
+    async function detectXR() {
+      if (!window.isSecureContext || !navigator.xr || typeof WebGL2RenderingContext === 'undefined' || typeof XRWebGLLayer === 'undefined') return;
+      try {
+        const [ar, vr] = await Promise.allSettled([
+          navigator.xr.isSessionSupported('immersive-ar'),
+          navigator.xr.isSessionSupported('immersive-vr')
+        ]);
+        state.xrMode = ar.status === 'fulfilled' && ar.value ? 'immersive-ar' : vr.status === 'fulfilled' && vr.value ? 'immersive-vr' : null;
+        state.xrSupported = !!state.xrMode;
+        ui.xrButton.hidden = !state.xrSupported;
+        ui.xrControls.classList.toggle('visible', state.xrSupported);
+        ui.xrButton.disabled = !state.xrSupported || !ui.stage.classList.contains('is-playing');
+        ui.xrButton.textContent = state.xrMode === 'immersive-ar' ? 'Enter passthrough XR' : 'Enter VR';
+        updateXRLabels();
+      } catch (_) { /* XR support is optional; browser video remains available. */ }
+    }
+    function compileShader(gl, type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        const log = gl.getShaderInfoLog(shader);
+        gl.deleteShader(shader);
+        throw new Error(`XR shader failed: ${log}`);
+      }
+      return shader;
+    }
+    function createXRRenderer(gl) {
+      const vertex = compileShader(gl, gl.VERTEX_SHADER, `#version 300 es
+        layout(location = 0) in vec3 aPosition;
+        layout(location = 1) in vec2 aUV;
+        uniform mat4 uMVP;
+        out vec2 vUV;
+        void main() { vUV = aUV; gl_Position = uMVP * vec4(aPosition, 1.0); }
+      `);
+      const fragment = compileShader(gl, gl.FRAGMENT_SHADER, `#version 300 es
+        precision highp float;
+        in vec2 vUV;
+        uniform sampler2D uVideo;
+        out vec4 outColor;
+        void main() { outColor = texture(uVideo, vUV); }
+      `);
+      const program = gl.createProgram();
+      gl.attachShader(program, vertex);
+      gl.attachShader(program, fragment);
+      gl.linkProgram(program);
+      gl.deleteShader(vertex);
+      gl.deleteShader(fragment);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        const log = gl.getProgramInfoLog(program);
+        gl.deleteProgram(program);
+        throw new Error(`XR program failed: ${log}`);
+      }
+      const vao = gl.createVertexArray();
+      const vertexBuffer = gl.createBuffer();
+      const indexBuffer = gl.createBuffer();
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 20, 0);
+      gl.enableVertexAttribArray(1);
+      gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 20, 12);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+      gl.bindVertexArray(null);
+      const texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([20, 22, 20, 255]));
+      return { gl, program, vao, vertexBuffer, indexBuffer, texture, mvpLocation: gl.getUniformLocation(program, 'uMVP'), meshAspect: null, indexCount: 0, lastVideoTime: -1, videoDirty: true };
+    }
+    function buildXRMesh(xr, aspect) {
+      const gl = xr.gl;
+      const segments = state.xrCurved ? 48 : 1;
+      const vertices = [];
+      const indices = [];
+      const curveAngle = state.xrCurved ? 0.82 : 0;
+      for (let i = 0; i <= segments; i++) {
+        const u = i / segments;
+        const centered = u - 0.5;
+        const x = curveAngle ? aspect * Math.sin(centered * curveAngle) / curveAngle : aspect * centered;
+        const z = curveAngle ? aspect * (1 - Math.cos(centered * curveAngle)) / curveAngle : 0;
+        vertices.push(x, 0.5, z, u, 1, x, -0.5, z, u, 0);
+        if (i < segments) {
+          const base = i * 2;
+          indices.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
+        }
+      }
+      gl.bindVertexArray(xr.vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, xr.vertexBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, xr.indexBuffer);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+      gl.bindVertexArray(null);
+      xr.indexCount = indices.length;
+      xr.meshAspect = aspect;
+    }
+    function recenterXR(pose) {
+      const xr = state.xr;
+      if (!xr || !pose) return;
+      const position = pose.transform.position;
+      const q = pose.transform.orientation;
+      let dx = -2 * (q.x * q.z + q.w * q.y);
+      let dz = -1 + 2 * (q.x * q.x + q.y * q.y);
+      const length = Math.hypot(dx, dz) || 1;
+      dx /= length; dz /= length;
+      xr.anchor = { x: position.x, y: position.y, z: position.z, dx, dz, yaw: Math.atan2(-dx, -dz) };
+    }
+    function multiply4(a, b) {
+      const out = new Float32Array(16);
+      for (let col = 0; col < 4; col++) for (let row = 0; row < 4; row++) {
+        for (let k = 0; k < 4; k++) out[col * 4 + row] += a[k * 4 + row] * b[col * 4 + k];
+      }
+      return out;
+    }
+    function modelMatrix(anchor) {
+      const size = 1.25 * state.xrScale;
+      const cosine = Math.cos(anchor.yaw), sine = Math.sin(anchor.yaw);
+      return new Float32Array([
+        size * cosine, 0, -size * sine, 0,
+        0, size, 0, 0,
+        size * sine, 0, size * cosine, 0,
+        anchor.x + anchor.dx * state.xrDistance, anchor.y, anchor.z + anchor.dz * state.xrDistance, 1
+      ]);
+    }
+    function xrFrame(time, frame) {
+      const xr = state.xr;
+      if (!xr || frame.session !== xr.session) return;
+      xr.session.requestAnimationFrame(xrFrame);
+      const pose = frame.getViewerPose(xr.referenceSpace);
+      if (!pose) return;
+      xr.lastPose = pose;
+      if (!xr.anchor) recenterXR(pose);
+      const elapsed = xr.lastTime ? clamp((time - xr.lastTime) / 1000, 0, 0.05) : 0;
+      xr.lastTime = time;
+      for (const source of xr.session.inputSources) {
+        const axes = source.gamepad?.axes;
+        if (!axes || axes.length < 2) continue;
+        const x = axes[axes.length - 2], y = axes[axes.length - 1];
+        if (Math.abs(x) > 0.35) state.xrScale = clamp(state.xrScale + x * elapsed * 0.55, 0.6, 2.2);
+        if (Math.abs(y) > 0.35) state.xrDistance = clamp(state.xrDistance + y * elapsed * 0.8, 0.8, 3.5);
+      }
+      if (!xr.lastLabelTime || time - xr.lastLabelTime > 250) { updateXRLabels(); xr.lastLabelTime = time; }
+      const gl = xr.gl;
+      const layer = xr.session.renderState.baseLayer;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+      gl.clearColor(0.04, 0.055, 0.045, xr.mode === 'immersive-ar' ? 0 : 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      const aspect = ui.video.videoWidth && ui.video.videoHeight ? ui.video.videoWidth / ui.video.videoHeight : 16 / 9;
+      if (xr.meshAspect !== aspect) buildXRMesh(xr, aspect);
+      gl.useProgram(xr.program);
+      gl.bindVertexArray(xr.vao);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, xr.texture);
+      if (ui.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && (xr.videoDirty || (!('requestVideoFrameCallback' in ui.video) && xr.lastVideoTime !== ui.video.currentTime))) {
+        try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, ui.video); xr.videoDirty = false; xr.lastVideoTime = ui.video.currentTime; }
+        catch (_) { /* A late frame is safe to skip. */ }
+      }
+      const model = modelMatrix(xr.anchor);
+      for (const view of pose.views) {
+        const viewport = layer.getViewport(view);
+        gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
+        const mvp = multiply4(view.projectionMatrix, multiply4(view.transform.inverse.matrix, model));
+        gl.uniformMatrix4fv(xr.mvpLocation, false, mvp);
+        gl.drawElements(gl.TRIANGLES, xr.indexCount, gl.UNSIGNED_SHORT, 0);
+      }
+      gl.bindVertexArray(null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+    function cleanupXR(session) {
+      const xr = state.xr;
+      if (!xr || xr.session !== session) return;
+      const gl = xr.gl;
+      gl.deleteTexture(xr.texture);
+      gl.deleteBuffer(xr.vertexBuffer);
+      gl.deleteBuffer(xr.indexBuffer);
+      gl.deleteVertexArray(xr.vao);
+      gl.deleteProgram(xr.program);
+      state.xr = null;
+      ui.xrOverlay.classList.remove('active');
+      ui.xrButton.textContent = state.xrMode === 'immersive-ar' ? 'Enter passthrough XR' : 'Enter VR';
+      ui.xrButton.disabled = !ui.stage.classList.contains('is-playing');
+    }
+    async function enterXR() {
+      if (state.xr) { await state.xr.session.end(); return; }
+      if (!state.xrSupported || !ui.stage.classList.contains('is-playing')) return;
+      let session;
+      try {
+        session = await navigator.xr.requestSession(state.xrMode, { optionalFeatures: ['dom-overlay', 'local-floor'], domOverlay: { root: ui.xrOverlay } });
+        const canvas = document.createElement('canvas');
+        const gl = canvas.getContext('webgl2', { xrCompatible: true, alpha: state.xrMode === 'immersive-ar', antialias: true, preserveDrawingBuffer: false });
+        if (!gl) throw new Error('This browser has no WebGL2 context for XR.');
+        if (gl.makeXRCompatible) await gl.makeXRCompatible();
+        const renderer = createXRRenderer(gl);
+        renderer.session = session;
+        renderer.mode = state.xrMode;
+        renderer.referenceSpace = await session.requestReferenceSpace('local');
+        session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl, { alpha: state.xrMode === 'immersive-ar', antialias: true }) });
+        state.xr = renderer;
+        session.addEventListener('end', () => cleanupXR(session), { once: true });
+        session.addEventListener('select', () => recenterXR(state.xr?.lastPose));
+        ui.xrOverlay.classList.toggle('active', !!session.domOverlayState);
+        ui.xrButton.textContent = 'Exit XR';
+        session.requestAnimationFrame(xrFrame);
+        if ('requestVideoFrameCallback' in ui.video) {
+          const markFrame = () => { if (state.xr === renderer) { renderer.videoDirty = true; ui.video.requestVideoFrameCallback(markFrame); } };
+          ui.video.requestVideoFrameCallback(markFrame);
+        }
+      } catch (error) {
+        if (session) await session.end().catch(() => {});
+        setMessage(`XR could not start: ${formatError(error)}`, 'error');
+      }
+    }
+
+    ui.pairButton.addEventListener('click', confirmPairing);
+    ui.pairCode.addEventListener('keydown', event => { if (event.key === 'Enter') confirmPairing(); });
+    ui.retry.addEventListener('click', () => { ui.retry.hidden = true; state.token ? afterPairing() : startPairing(); });
+    ui.reconnect.addEventListener('click', connect);
+    ui.xrButton.addEventListener('click', enterXR);
+    document.querySelectorAll('[data-xr-action]').forEach(button => button.addEventListener('click', () => xrAction(button.dataset.xrAction)));
+    ui.audio.addEventListener('click', async () => {
+      if (state.audioRequested && !ui.video.muted) {
+        state.audioRequested = false;
+        ui.video.muted = true;
+        ui.audio.textContent = 'Enable audio';
+      } else {
+        state.audioRequested = true;
+        await enableAudioPlayback();
+      }
+    });
+    ui.video.addEventListener('pause', () => {
+      if (!state.audioRequested || !state.pc || state.pc.connectionState !== 'connected' || ui.video.muted) return;
+      ui.video.muted = true;
+      state.audioRequested = false;
+      ui.audio.textContent = 'Enable audio';
+      playVideo().then(() => setMessage('The browser paused playback when sound started. Tap Enable audio again.', 'error'));
+    });
+    ui.display.addEventListener('change', connect);
+    for (const control of [ui.qualitySelect, ui.fpsSelect, ui.bitrateSelect]) control.addEventListener('change', () => { if (state.controls && state.token) connect(); });
+    ui.fullscreen.addEventListener('click', async () => {
+      try { if (document.fullscreenElement) await document.exitFullscreen(); else await ui.stage.requestFullscreen(); }
+      catch (_) { setMessage('Fullscreen is unavailable in this browser. Use the browser window controls.', 'error'); }
+    });
+    document.addEventListener('fullscreenchange', () => { ui.fullscreen.textContent = document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen'; });
+    ui.play.addEventListener('click', playVideo);
+    window.addEventListener('online', () => { if (state.token && (!state.pc || state.pc.connectionState !== 'connected')) afterPairing(); });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && state.token && (!state.pc || state.pc.connectionState === 'failed' || state.pc.connectionState === 'disconnected')) afterPairing(); });
+    window.addEventListener('beforeunload', () => { state.stop = true; cleanup(); });
+
+    async function boot() {
+      textValue('diag-secure', window.isSecureContext ? 'Yes' : 'No');
+      if (!window.RTCPeerConnection || !window.MediaStream) {
+        setStatus('Unsupported browser', 'error');
+        setWelcome('WebRTC is unavailable.', 'Open this address in a current Quest Browser, Chrome, Edge, Firefox, or Safari.');
+        showPairing(false);
+        return;
+      }
+      if (!window.isSecureContext) setMessage('This page is not a secure context. Use the host HTTPS address.', 'error');
+      await loadStatus();
+      detectXR();
+      if (state.token) await afterPairing();
+      else { showPairing(true); await startPairing(); }
+    }
+    boot();
+  })();
+  </script>
+</body>
+</html>

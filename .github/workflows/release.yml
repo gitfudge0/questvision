@@ -1,0 +1,70 @@
+name: Release archives
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            name: questdisplay-linux-x86_64
+          - os: macos-15
+            name: QuestDisplay-macos-arm64
+          - os: macos-15-intel
+            name: QuestDisplay-macos-x86_64
+          - os: windows-2025
+            name: QuestDisplay-windows-x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux native build headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev cmake pkg-config libpipewire-0.3-dev libspa-0.2-dev libdbus-1-dev
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Check CMake source prerequisite
+        run: cmake --version
+      - name: Build release binary
+        run: cargo build --locked --release
+      - name: Archive Linux executable
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir dist
+          cp target/release/questdisplay dist/questdisplay
+          tar -C dist -czf questdisplay-linux-x86_64.tar.gz questdisplay
+      - name: Archive macOS executable
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir dist
+          cp target/release/questdisplay dist/questdisplay
+          tar -C dist -czf "${{ matrix.name }}.tar.gz" questdisplay
+      - name: Archive Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Compress-Archive -Path target/release/questdisplay.exe -DestinationPath dist/QuestDisplay-windows-x86_64.zip
+      - name: Move Unix archive into upload directory
+        if: runner.os != 'Windows'
+        shell: bash
+        run: mv "${{ matrix.name }}.tar.gz" dist/
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/${{ matrix.name }}.*
+          if-no-files-found: error
+
+# These are unsigned CLI archives, not installers. Linux still needs the
+# system PipeWire/SPA/D-Bus libraries and a graphical portal session.
