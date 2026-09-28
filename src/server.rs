@@ -54,6 +54,7 @@ struct Offer {
     quality: Option<String>,
     fps: Option<u32>,
     bitrate_mbps: Option<u32>,
+    mode: Option<crate::adaptive::AdaptationMode>,
 }
 #[derive(Serialize)]
 struct Answer {
@@ -310,6 +311,7 @@ async fn offer(
         &request.sdp,
         &config.listen.to_string(),
         settings,
+        request.mode.unwrap_or_default(),
         &display,
         credential_digest,
         config.audio,

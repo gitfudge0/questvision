@@ -18,11 +18,15 @@ use rtc::{
     },
 };
 use std::{
-    sync::Arc,
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
-use tokio::sync::oneshot;
+use tokio::sync::{Mutex, Notify, mpsc, oneshot, watch};
 use webrtc::{
+    data_channel::{DataChannel, DataChannelEvent},
     media_stream::Track,
     media_stream::track_local::{TrackLocal, static_sample::TrackLocalStaticSample},
     peer_connection::{
@@ -31,8 +35,142 @@ use webrtc::{
     rtp_transceiver::RtpSender,
 };
 
+const CONTROL_CHANNEL_LABEL: &str = "questdisplay-control";
+const CONTROL_MESSAGE_MAX_BYTES: usize = 4096;
+
+struct ReceivedControl {
+    bytes: Vec<u8>,
+    received_at: Instant,
+}
+
+// Each kind has its own capacity-one inbox. A telemetry burst cannot overwrite
+// the latest desired mode or ceiling; newer commands of the same kind supersede.
+struct LatestMessage {
+    sender: mpsc::Sender<ReceivedControl>,
+    receiver: Mutex<mpsc::Receiver<ReceivedControl>>,
+}
+
+impl LatestMessage {
+    fn new() -> Self {
+        let (sender, receiver) = mpsc::channel(1);
+        Self {
+            sender,
+            receiver: Mutex::new(receiver),
+        }
+    }
+
+    async fn replace(&self, message: ReceivedControl) {
+        let mut receiver = self.receiver.lock().await;
+        if let Err(mpsc::error::TrySendError::Full(message)) = self.sender.try_send(message) {
+            let _ = receiver.try_recv();
+            let _ = self.sender.try_send(message);
+        }
+    }
+
+    async fn clear(&self) {
+        let _ = self.receiver.lock().await.try_recv();
+    }
+}
+
+struct ChannelTask(tokio::task::JoinHandle<()>);
+
+impl Drop for ChannelTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+struct ControlSession {
+    accepted: AtomicBool,
+    channel: Mutex<Option<Arc<dyn DataChannel>>>,
+    poll_task: Mutex<Option<ChannelTask>>,
+    available: watch::Sender<bool>,
+    incoming: Notify,
+    telemetry: LatestMessage,
+    mode: LatestMessage,
+    ceiling: LatestMessage,
+}
+
+impl ControlSession {
+    fn new() -> Arc<Self> {
+        let (available, _) = watch::channel(false);
+        Arc::new(Self {
+            accepted: AtomicBool::new(false),
+            channel: Mutex::new(None),
+            poll_task: Mutex::new(None),
+            available,
+            incoming: Notify::new(),
+            telemetry: LatestMessage::new(),
+            mode: LatestMessage::new(),
+            ceiling: LatestMessage::new(),
+        })
+    }
+
+    async fn feedback_closed(&self) {
+        self.available.send_replace(false);
+        self.telemetry.clear().await;
+        self.channel.lock().await.take();
+        self.incoming.notify_one();
+        tracing::debug!("browser control feedback unavailable; media session continues");
+    }
+
+    async fn stop(&self) {
+        self.poll_task.lock().await.take();
+        self.feedback_closed().await;
+    }
+}
+
+async fn poll_control(channel: Arc<dyn DataChannel>, session: Weak<ControlSession>) {
+    while let Some(event) = channel.poll().await {
+        let Some(session) = session.upgrade() else {
+            break;
+        };
+        match event {
+            DataChannelEvent::OnOpen => {
+                session.available.send_replace(true);
+                session.incoming.notify_one();
+            }
+            DataChannelEvent::OnMessage(message) => {
+                if !message.is_string || message.data.len() > CONTROL_MESSAGE_MAX_BYTES {
+                    tracing::debug!("ignored non-text or oversized browser control message");
+                    continue;
+                }
+                let received_at = Instant::now();
+                let Ok(control) =
+                    serde_json::from_slice::<crate::adaptive::ControlMessage>(&message.data)
+                else {
+                    tracing::debug!("ignored malformed browser control message");
+                    continue;
+                };
+                let inbox = match control {
+                    crate::adaptive::ControlMessage::BrowserStats(_) => &session.telemetry,
+                    crate::adaptive::ControlMessage::SetMode(_) => &session.mode,
+                    crate::adaptive::ControlMessage::SetCeiling(_) => &session.ceiling,
+                };
+                inbox
+                    .replace(ReceivedControl {
+                        bytes: message.data.to_vec(),
+                        received_at,
+                    })
+                    .await;
+                session.incoming.notify_one();
+            }
+            DataChannelEvent::OnClosing | DataChannelEvent::OnClose => break,
+            DataChannelEvent::OnError => {
+                tracing::debug!("browser control channel reported an error");
+            }
+            _ => {}
+        }
+    }
+    if let Some(session) = session.upgrade() {
+        session.feedback_closed().await;
+    }
+}
+
 struct Handler {
     gathered: tokio::sync::Mutex<Option<oneshot::Sender<()>>>,
+    // Avoid a PeerConnection -> handler -> channel -> PeerConnection Arc cycle.
+    control: Weak<ControlSession>,
 }
 #[async_trait::async_trait]
 impl PeerConnectionEventHandler for Handler {
@@ -43,12 +181,31 @@ impl PeerConnectionEventHandler for Handler {
             let _ = tx.send(());
         }
     }
+
+    async fn on_data_channel(&self, channel: Arc<dyn DataChannel>) {
+        let Some(session) = self.control.upgrade() else {
+            let _ = channel.close().await;
+            return;
+        };
+        if channel.label().await.ok().as_deref() != Some(CONTROL_CHANNEL_LABEL)
+            || session.accepted.swap(true, Ordering::Relaxed)
+        {
+            let _ = channel.close().await;
+            return;
+        }
+        *session.channel.lock().await = Some(Arc::clone(&channel));
+        *session.poll_task.lock().await = Some(ChannelTask(tokio::spawn(poll_control(
+            channel,
+            Arc::downgrade(&session),
+        ))));
+    }
 }
 
 pub async fn answer(
     offer_sdp: &str,
     lan_ip: &str,
     settings: crate::quality::StreamSettings,
+    mode: crate::adaptive::AdaptationMode,
     display: &str,
     credential_digest: String,
     audio_requested: bool,
@@ -83,12 +240,15 @@ pub async fn answer(
     }
     let registry = register_default_interceptors(Registry::new(), &mut media)?;
     let (tx, rx) = oneshot::channel();
+    let control = ControlSession::new();
+    tracing::debug!(?mode, "starting peer session with offer adaptation mode");
     let pc = PeerConnectionBuilder::new()
         .with_configuration(RTCConfigurationBuilder::new().build())
         .with_media_engine(media)
         .with_interceptor_registry(registry)
         .with_handler(Arc::new(Handler {
             gathered: tokio::sync::Mutex::new(Some(tx)),
+            control: Arc::downgrade(&control),
         }))
         .with_udp_addrs(vec![format!("{lan_ip}:0")])
         .build()
@@ -168,6 +328,7 @@ pub async fn answer(
         if let Some(task) = audio_task {
             task.abort();
         }
+        control.stop().await;
         let _ = pc.close().await;
     });
     Ok((sdp, audio_available))
