@@ -183,6 +183,7 @@ pub struct AdaptiveController {
     tiers: Vec<StreamSettings>,
     tier: usize,
     effective: StreamSettings,
+    desired_target: StreamSettings,
     pending: Option<StreamSettings>,
     browser: PressureTrack,
     host: PressureTrack,
@@ -209,6 +210,7 @@ impl AdaptiveController {
             tiers,
             tier: 0,
             effective: ceiling,
+            desired_target: ceiling,
             pending: None,
             browser: PressureTrack::new(),
             host: PressureTrack::new(),
@@ -315,6 +317,8 @@ impl AdaptiveController {
         self.reset_evidence();
         if mode == AdaptationMode::Fixed {
             self.select(0, Instant::now(), PressureReason::Stable);
+        } else {
+            self.select(self.tier, Instant::now(), PressureReason::Stable);
         }
         self.current()
     }
@@ -368,11 +372,9 @@ impl AdaptiveController {
         }
         let now = Instant::now();
         self.effective = settings;
-        // A superseded proposal may finish applying before the newest one.
-        // Record the host truth, retaining the latest desired policy in that case.
-        if self.pending == Some(settings) {
-            self.pending = None;
-        }
+        // An old apply can finish after the latest target was already effective
+        // and had no pending work. Keep that target independently of pending.
+        self.reconcile_pending();
         self.tier = self.index_for(settings);
         self.last_transition = Some(now);
         self.error = None;
@@ -562,6 +564,7 @@ impl AdaptiveController {
 
     fn select(&mut self, tier: usize, now: Instant, reason: PressureReason) {
         let next = self.tiers[tier];
+        self.desired_target = next;
         if self.effective != next {
             tracing::info!(previous = ?self.effective, desired = ?next, ?reason, ?now, tier, "adaptive tier proposal");
             self.pending = Some(next);
@@ -569,6 +572,17 @@ impl AdaptiveController {
             self.tier = tier;
             self.pending = None;
         }
+    }
+
+    fn reconcile_pending(&mut self) {
+        let target = if self.mode == AdaptationMode::Fixed {
+            self.ceiling
+        } else {
+            // Recheck the latest target against the active ceiling's ladder.
+            self.tiers[self.index_for(self.desired_target)]
+        };
+        self.desired_target = target;
+        self.pending = (target != self.effective).then_some(target);
     }
 
     fn index_for(&self, settings: StreamSettings) -> usize {
