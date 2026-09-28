@@ -8,7 +8,7 @@ use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer
 use openh264::{
     OpenH264API,
     encoder::{
-        BitRate, Complexity, Encoder, EncoderConfig, FrameRate, IntraFramePeriod, Profile,
+        BitRate, Complexity, Encoder, EncoderConfig, FrameRate, FrameType, IntraFramePeriod, Profile,
         RateControlMode, UsageType,
     },
     formats::{BgraSliceU8, RgbaSliceU8, YUVBuffer, YUVSource},
@@ -21,7 +21,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 pub struct EncodedFrame {
     pub data: Vec<u8>,
@@ -36,6 +36,14 @@ pub struct EncodedFrame {
 pub struct CaptureStreams {
     pub video: mpsc::Receiver<EncodedFrame>,
     pub audio: Option<mpsc::Receiver<EncodedAudio>>,
+    pub policy: watch::Sender<StreamSettings>,
+    pub applied: watch::Receiver<Option<PolicyApplyResult>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PolicyApplyResult {
+    pub settings: StreamSettings,
+    pub error: Option<String>,
 }
 
 pub async fn start(
@@ -46,9 +54,10 @@ pub async fn start(
     let (frames_tx, frames_rx) = mpsc::channel(1);
     let (audio_tx, audio_rx) = mpsc::channel(8);
     let (ready_tx, ready_rx) = oneshot::channel();
+    let (policy_tx, mut policy_rx) = watch::channel(settings);
+    let (applied_tx, applied_rx) = watch::channel(None);
     let display = display.to_owned();
     let fps = settings.fps;
-    let bitrate_mbps = settings.bitrate_mbps;
     thread::spawn(move || {
         let target = if display == "primary" {
             Target::Primary
@@ -83,23 +92,7 @@ pub async fn start(
                 return;
             }
         };
-        let config = EncoderConfig::new()
-            .bitrate(BitRate::from_bps(bitrate_mbps * 1_000_000))
-            .max_frame_rate(FrameRate::from_hz(fps as f32))
-            .usage_type(UsageType::ScreenContentRealTime)
-            .profile(Profile::Baseline)
-            .rate_control_mode(RateControlMode::Bitrate)
-            .complexity(if settings.preset == Preset::Quality {
-                Complexity::Medium
-            } else {
-                Complexity::Low
-            })
-            .adaptive_quantization(false)
-            .background_detection(false)
-            .intra_frame_period(IntraFramePeriod::from_num_frames(fps * 2))
-            .skip_frames(true);
-        let encoder = Encoder::with_api_config(OpenH264API::from_source(), config);
-        let mut encoder = match encoder {
+        let mut encoder = match create_encoder(settings) {
             Ok(e) => e,
             Err(e) => {
                 let _ = ready_tx.send(Err(anyhow::anyhow!("H.264 encoder failed: {e}")));
@@ -130,16 +123,101 @@ pub async fn start(
         let mut resizer = Resizer::new();
         let mut yuv_buffer = None;
         let mut previous: Option<Instant> = None;
-        let frame_budget = Duration::from_secs_f64(1.0 / fps as f64);
+        let mut previous_output: Option<Instant> = None;
+        let mut next_eligible: Option<Instant> = None;
+        let mut effective_settings = settings;
         let mut previous_queue_observation: Option<(Duration, bool)> = None;
-        while let Ok(frame) = capture.video().recv() {
+        while let Ok(mut frame) = capture.video().recv() {
             // Delivery is when recv returns, not the native desktop capture time.
             let capture_delivered_at = Instant::now();
             let capture_receive_interval =
                 previous.map(|prev| capture_delivered_at.duration_since(prev));
-            let duration = capture_receive_interval.unwrap_or(frame_budget);
             previous = Some(capture_delivered_at);
-            match encode(&mut encoder, &mut resizer, &mut yuv_buffer, frame, settings) {
+            let requested = policy_rx
+                .has_changed()
+                .unwrap_or(false)
+                .then(|| *policy_rx.borrow_and_update());
+            let mut applied_settings = None;
+            // Gate raw frames only; encoded reference frames always keep their blocking queue.
+            if requested.is_none()
+                && effective_settings.fps < fps
+                && next_eligible.is_some_and(|deadline| capture_delivered_at < deadline)
+            {
+                continue;
+            }
+            let result = if let Some(requested) = requested {
+                let candidate = (|| -> Result<(Encoder, EncodeResult)> {
+                    anyhow::ensure!(
+                        requested.fps <= fps,
+                        "requested FPS exceeds the native capture ceiling; restart required"
+                    );
+                    let mut candidate = create_encoder(requested)?;
+                    let result = encode(
+                        &mut candidate,
+                        &mut resizer,
+                        &mut yuv_buffer,
+                        &mut frame,
+                        requested,
+                    )?;
+                    // with_api_config initializes lazily on encode. Require its actual IDR
+                    // before replacing the old encoder or exposing dependent delta frames.
+                    anyhow::ensure!(
+                        !result.data.is_empty() && result.is_idr,
+                        "replacement encoder did not emit a recovery IDR frame"
+                    );
+                    Ok((candidate, result))
+                })();
+                match candidate {
+                    Ok((candidate, result)) => {
+                        encoder = candidate;
+                        effective_settings = requested;
+                        next_eligible = Some(capture_delivered_at);
+                        applied_settings = Some(requested);
+                        Ok(result)
+                    }
+                    Err(error) => {
+                        tracing::warn!(?requested, %error, "encoder policy failed; holding previous settings");
+                        applied_tx.send_replace(Some(PolicyApplyResult {
+                            settings: requested,
+                            error: Some(error.to_string()),
+                        }));
+                        if effective_settings.fps < fps
+                            && next_eligible.is_some_and(|deadline| capture_delivered_at < deadline)
+                        {
+                            continue;
+                        }
+                        encode(
+                            &mut encoder,
+                            &mut resizer,
+                            &mut yuv_buffer,
+                            &mut frame,
+                            effective_settings,
+                        )
+                    }
+                }
+            } else {
+                encode(
+                    &mut encoder,
+                    &mut resizer,
+                    &mut yuv_buffer,
+                    &mut frame,
+                    effective_settings,
+                )
+            };
+            let frame_budget = Duration::from_secs_f64(1.0 / effective_settings.fps as f64);
+            let deadline = next_eligible.unwrap_or(capture_delivered_at);
+            let cadence_missed =
+                capture_delivered_at.saturating_duration_since(deadline) >= frame_budget;
+            // Keep the schedule's phase and advance beyond now instead of catching up
+            // with several encodes after a slow frame or a blocked encoded-queue send.
+            let intervals = capture_delivered_at
+                .saturating_duration_since(deadline)
+                .as_nanos()
+                / frame_budget.as_nanos()
+                + 1;
+            let intervals = u32::try_from(intervals).unwrap_or(u32::MAX);
+            next_eligible = Some(deadline + frame_budget * intervals);
+            match result {
                 Ok(result) if !result.data.is_empty() => {
                     let observed_at = Instant::now();
                     let frame_age_since_capture_delivery =
@@ -151,7 +229,9 @@ pub async fn start(
                         .unwrap_or((None, false));
                     let encoded_frame = EncodedFrame {
                         data: result.data,
-                        duration,
+                        duration: previous_output
+                            .map(|prev| capture_delivered_at.duration_since(prev))
+                            .unwrap_or(frame_budget),
                         resize_time: result.resize_time,
                         color_convert_time: result.color_convert_time,
                         encode_time: result.encode_time,
@@ -164,7 +244,8 @@ pub async fn start(
                             queue_wait,
                             queue_saturated,
                             // Allow receive jitter until a whole expected interval is missed.
-                            cadence_missed: frame_age_since_capture_delivery > frame_budget
+                            cadence_missed: cadence_missed
+                                || frame_age_since_capture_delivery > frame_budget
                                 || capture_receive_interval
                                     .is_some_and(|interval| interval >= frame_budget * 2),
                             frame_age_since_capture_delivery,
@@ -177,6 +258,15 @@ pub async fn start(
                         break;
                     }
                     previous_queue_observation = Some((send_started.elapsed(), queue_saturated));
+                    previous_output = Some(capture_delivered_at);
+                    // The replacement's IDR has entered the unchanged media queue before
+                    // reporting settings as applied. The result watch cannot block capture.
+                    if let Some(settings) = applied_settings {
+                        applied_tx.send_replace(Some(PolicyApplyResult {
+                            settings,
+                            error: None,
+                        }));
+                    }
                 }
                 Ok(_) => {}
                 Err(e) => {
@@ -193,6 +283,8 @@ pub async fn start(
     Ok(CaptureStreams {
         video: frames_rx,
         audio: audio_available.then_some(audio_rx),
+        policy: policy_tx,
+        applied: applied_rx,
     })
 }
 
@@ -202,13 +294,34 @@ struct EncodeResult {
     color_convert_time: Duration,
     encode_time: Duration,
     output_size: (u32, u32),
+    is_idr: bool,
+}
+
+fn create_encoder(settings: StreamSettings) -> Result<Encoder> {
+    anyhow::ensure!(settings.is_valid(), "invalid encoder policy settings");
+    let config = EncoderConfig::new()
+        .bitrate(BitRate::from_bps(settings.bitrate_mbps * 1_000_000))
+        .max_frame_rate(FrameRate::from_hz(settings.fps as f32))
+        .usage_type(UsageType::ScreenContentRealTime)
+        .profile(Profile::Baseline)
+        .rate_control_mode(RateControlMode::Bitrate)
+        .complexity(if settings.preset == Preset::Quality {
+            Complexity::Medium
+        } else {
+            Complexity::Low
+        })
+        .adaptive_quantization(false)
+        .background_detection(false)
+        .intra_frame_period(IntraFramePeriod::from_num_frames(settings.fps * 2))
+        .skip_frames(true);
+    Ok(Encoder::with_api_config(OpenH264API::from_source(), config)?)
 }
 
 fn encode(
     encoder: &mut Encoder,
     resizer: &mut Resizer,
     yuv_buffer: &mut Option<YUVBuffer>,
-    mut frame: VideoFrame,
+    frame: &mut VideoFrame,
     settings: StreamSettings,
 ) -> Result<EncodeResult> {
     let (w, h) = frame.size;
@@ -264,13 +377,16 @@ fn encode(
     };
     let color_convert_time = convert_started.elapsed();
     let started = Instant::now();
-    let data = encoder.encode(yuv)?.to_vec();
+    let bitstream = encoder.encode(yuv)?;
+    let is_idr = matches!(bitstream.frame_type(), FrameType::IDR);
+    let data = bitstream.to_vec();
     Ok(EncodeResult {
         data,
         resize_time,
         color_convert_time,
         encode_time: started.elapsed(),
         output_size: (out_w, out_h),
+        is_idr,
     })
 }
 
