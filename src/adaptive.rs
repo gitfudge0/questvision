@@ -397,6 +397,17 @@ impl AdaptiveController {
         self.current()
     }
 
+    pub fn mark_browser_unavailable(&mut self) -> ControllerUpdate {
+        // Retain arrival and browser sequence/sample ordering for this session,
+        // while removing all browser pressure and shared recovery evidence.
+        let observed_at = self.browser.observed_at;
+        self.browser = PressureTrack::new();
+        self.browser.observed_at = observed_at;
+        self.healthy_since = None;
+        tracing::info!("browser feedback unavailable; preserving host adaptation");
+        self.current()
+    }
+
     pub fn current(&self) -> ControllerUpdate {
         let now = Instant::now();
         let browser_fresh = self.browser.fresh(now, self.policy.browser_freshness);
