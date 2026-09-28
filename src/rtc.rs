@@ -37,6 +37,9 @@ use webrtc::{
 
 const CONTROL_CHANNEL_LABEL: &str = "questdisplay-control";
 const CONTROL_MESSAGE_MAX_BYTES: usize = 4096;
+const STATUS_ERROR_MAX_BYTES: usize = 256;
+const STATUS_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+const STATUS_SEND_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
 struct ReceivedControl {
     bytes: Vec<u8>,
@@ -70,6 +73,10 @@ impl LatestMessage {
     async fn clear(&self) {
         let _ = self.receiver.lock().await.try_recv();
     }
+
+    async fn take(&self) -> Option<ReceivedControl> {
+        self.receiver.lock().await.try_recv().ok()
+    }
 }
 
 struct ChannelTask(tokio::task::JoinHandle<()>);
@@ -86,6 +93,7 @@ struct ControlSession {
     poll_task: Mutex<Option<ChannelTask>>,
     available: watch::Sender<bool>,
     incoming: Notify,
+    ingress: Mutex<()>,
     telemetry: LatestMessage,
     mode: LatestMessage,
     ceiling: LatestMessage,
@@ -100,6 +108,7 @@ impl ControlSession {
             poll_task: Mutex::new(None),
             available,
             incoming: Notify::new(),
+            ingress: Mutex::new(()),
             telemetry: LatestMessage::new(),
             mode: LatestMessage::new(),
             ceiling: LatestMessage::new(),
@@ -147,12 +156,15 @@ async fn poll_control(channel: Arc<dyn DataChannel>, session: Weak<ControlSessio
                     crate::adaptive::ControlMessage::SetMode(_) => &session.mode,
                     crate::adaptive::ControlMessage::SetCeiling(_) => &session.ceiling,
                 };
-                inbox
-                    .replace(ReceivedControl {
-                        bytes: message.data.to_vec(),
-                        received_at,
-                    })
-                    .await;
+                {
+                    let _ingress = session.ingress.lock().await;
+                    inbox
+                        .replace(ReceivedControl {
+                            bytes: message.data.to_vec(),
+                            received_at,
+                        })
+                        .await;
+                }
                 session.incoming.notify_one();
             }
             DataChannelEvent::OnClosing | DataChannelEvent::OnClose => break,
@@ -164,6 +176,253 @@ async fn poll_control(channel: Arc<dyn DataChannel>, session: Weak<ControlSessio
     }
     if let Some(session) = session.upgrade() {
         session.feedback_closed().await;
+    }
+}
+
+#[derive(Default)]
+struct NewerCommands {
+    mode: Option<(Instant, crate::adaptive::AdaptationMode)>,
+    ceiling: Option<(Instant, crate::quality::StreamSettings)>,
+}
+
+impl NewerCommands {
+    fn retain(&mut self, message: &crate::adaptive::ControlMessage, received_at: Instant) {
+        match message {
+            crate::adaptive::ControlMessage::SetMode(mode) => {
+                self.mode = Some((received_at, *mode));
+            }
+            crate::adaptive::ControlMessage::SetCeiling(ceiling) => {
+                self.ceiling = Some((received_at, *ceiling));
+            }
+            _ => {}
+        }
+    }
+
+    fn take(&mut self) -> Vec<(Instant, crate::adaptive::ControlMessage)> {
+        let mut commands = Vec::with_capacity(2);
+        if let Some((at, mode)) = self.mode.take() {
+            commands.push((at, crate::adaptive::ControlMessage::SetMode(mode)));
+        }
+        if let Some((at, ceiling)) = self.ceiling.take() {
+            commands.push((at, crate::adaptive::ControlMessage::SetCeiling(ceiling)));
+        }
+        commands.sort_by_key(|(at, _)| *at);
+        commands
+    }
+}
+
+fn route_control(
+    controller: &mut crate::adaptive::AdaptiveController,
+    message: crate::adaptive::ControlMessage,
+    received_at: Instant,
+) {
+    match message {
+        crate::adaptive::ControlMessage::BrowserStats(sample) => {
+            controller.observe_browser(sample, received_at);
+        }
+        crate::adaptive::ControlMessage::SetMode(mode) => {
+            controller.set_mode(mode);
+        }
+        crate::adaptive::ControlMessage::SetCeiling(ceiling) => {
+            controller.set_ceiling(ceiling);
+        }
+    }
+}
+
+async fn run_controller(
+    mut controller: crate::adaptive::AdaptiveController,
+    control: Arc<ControlSession>,
+    policy: watch::Sender<crate::quality::StreamSettings>,
+    mut applied: watch::Receiver<Option<crate::capture::PolicyApplyResult>>,
+    mut host_metrics: watch::Receiver<Option<crate::adaptive::HostMetrics>>,
+    status: watch::Sender<crate::adaptive::ControllerUpdate>,
+) {
+    let mut available = control.available.subscribe();
+    let mut browser_was_available = false;
+    let mut applied_open = true;
+    let mut metrics_open = true;
+    let mut in_flight = None;
+    let mut newer_commands = NewerCommands::default();
+    let mut refresh = tokio::time::interval(STATUS_REFRESH_INTERVAL);
+    refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        let mut apply_changed = false;
+        let mut metrics_changed = false;
+        tokio::select! {
+            _ = control.incoming.notified() => {}
+            result = available.changed() => {
+                if result.is_err() {
+                    break;
+                }
+            }
+            result = applied.changed(), if applied_open => {
+                applied_open = result.is_ok();
+                apply_changed = applied_open;
+            }
+            result = host_metrics.changed(), if metrics_open => {
+                metrics_open = result.is_ok();
+                metrics_changed = metrics_open;
+            }
+            _ = refresh.tick() => {}
+        }
+        let browser_available = *available.borrow_and_update();
+        if browser_was_available && !browser_available {
+            controller.mark_browser_unavailable();
+        }
+        browser_was_available = browser_available;
+
+        // Short try_recv locks let the channel poller keep draining library events.
+        let mut commands = Vec::with_capacity(3);
+        {
+            // Drain one consistent snapshot so a newer mode cannot slip behind
+            // a later ceiling merely because their inbox locks were read apart.
+            let _ingress = control.ingress.lock().await;
+            for inbox in [&control.mode, &control.ceiling, &control.telemetry] {
+                if let Some(message) = inbox.take().await
+                    && let Ok(parsed) =
+                        serde_json::from_slice::<crate::adaptive::ControlMessage>(&message.bytes)
+                {
+                    commands.push((message.received_at, parsed));
+                }
+            }
+        }
+        commands.sort_by_key(|(received_at, _)| *received_at);
+        for (received_at, command) in commands {
+            if matches!(command, crate::adaptive::ControlMessage::BrowserStats(_))
+                && !browser_available
+            {
+                continue;
+            }
+            if in_flight.is_some() {
+                newer_commands.retain(&command, received_at);
+            }
+            route_control(&mut controller, command, received_at);
+        }
+        if apply_changed {
+            let result = applied.borrow_and_update().clone();
+            if let Some(result) = result {
+                if in_flight != Some(result.settings) {
+                    tracing::warn!(
+                        ?result,
+                        ?in_flight,
+                        "ignored unexpected capture acknowledgement"
+                    );
+                } else {
+                    in_flight = None;
+                    if let Some(error) = result.error {
+                        status.send_replace(controller.report_apply_failure(error));
+                        // A failed older request must not erase a user's newer choice.
+                        for (received_at, command) in newer_commands.take() {
+                            route_control(&mut controller, command, received_at);
+                        }
+                    } else {
+                        controller.report_apply_success(result.settings);
+                        newer_commands = NewerCommands::default();
+                    }
+                }
+            }
+        }
+        if metrics_changed {
+            let sample = host_metrics.borrow_and_update().clone();
+            if let Some(sample) = sample {
+                controller.observe_host(sample);
+            }
+        }
+        if !applied_open && in_flight.take().is_some() {
+            controller.report_apply_failure("capture apply feedback unavailable".into());
+        }
+        // Serialize applies so the latest-result watch cannot hide an intermediate
+        // success behind a later failure. New desired state stays in the controller.
+        if in_flight.is_none()
+            && let Some(desired) = controller.desired_settings()
+        {
+            if policy.is_closed() || !applied_open {
+                controller.report_apply_failure("capture policy control unavailable".into());
+            } else {
+                policy.send_replace(desired);
+                in_flight = Some(desired);
+                newer_commands = NewerCommands::default();
+            }
+        }
+        status.send_replace(controller.current());
+    }
+}
+
+fn encode_status(mut update: crate::adaptive::ControllerUpdate) -> Result<String> {
+    if let Some(error) = update.error.as_mut()
+        && error.len() > STATUS_ERROR_MAX_BYTES
+    {
+        let mut end = STATUS_ERROR_MAX_BYTES;
+        while !error.is_char_boundary(end) {
+            end -= 1;
+        }
+        error.truncate(end);
+    }
+    let text = serde_json::to_string(&crate::adaptive::HostMessage::Status(update))?;
+    anyhow::ensure!(
+        text.len() <= CONTROL_MESSAGE_MAX_BYTES,
+        "host control status exceeded its message limit"
+    );
+    Ok(text)
+}
+
+async fn publish_status(
+    control: Arc<ControlSession>,
+    mut status: watch::Receiver<crate::adaptive::ControllerUpdate>,
+) {
+    let mut available = control.available.subscribe();
+    let mut last_sent = None;
+    let mut retry = tokio::time::interval(STATUS_SEND_RETRY_INTERVAL);
+    retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            result = status.changed() => {
+                if result.is_err() {
+                    break;
+                }
+            }
+            result = available.changed() => {
+                if result.is_err() {
+                    break;
+                }
+            }
+            _ = retry.tick() => {}
+        }
+        if !*available.borrow_and_update() {
+            continue;
+        }
+        let update = status.borrow_and_update().clone();
+        let text = match encode_status(update) {
+            Ok(text) => text,
+            Err(error) => {
+                tracing::warn!(%error, "could not serialize host control status");
+                continue;
+            }
+        };
+        if last_sent.as_ref() == Some(&text) {
+            continue;
+        }
+        let channel = control.channel.lock().await.clone();
+        let Some(channel) = channel else {
+            continue;
+        };
+        // This is the only host writer: one outstanding status in SCTP and one
+        // newest pending replacement. Never accumulate statuses for a stalled peer.
+        match channel.outstanding_bytes().await {
+            Ok(0) => match channel.try_send_text(&text).await {
+                Ok(()) => last_sent = Some(text),
+                Err(webrtc::error::Error::ErrSendBufferFull) => {}
+                Err(error) => {
+                    tracing::debug!(%error, "host status send failed; browser feedback unavailable");
+                    control.feedback_closed().await;
+                }
+            },
+            Ok(_) => {}
+            Err(error) => {
+                tracing::debug!(%error, "host status channel unavailable");
+                control.feedback_closed().await;
+            }
+        }
     }
 }
 
@@ -241,11 +500,14 @@ pub async fn answer(
     let registry = register_default_interceptors(Registry::new(), &mut media)?;
     let (tx, rx) = oneshot::channel();
     let control = ControlSession::new();
-    tracing::debug!(?mode, "starting peer session with offer adaptation mode");
+    let controller = crate::adaptive::AdaptiveController::new(settings, mode);
+    let (status_tx, status_rx) = watch::channel(controller.current());
+    let (metrics_tx, metrics_rx) = watch::channel(None);
     let pc = PeerConnectionBuilder::new()
         .with_configuration(RTCConfigurationBuilder::new().build())
         .with_media_engine(media)
         .with_interceptor_registry(registry)
+        .with_data_channel_send_buffer_limit(CONTROL_MESSAGE_MAX_BYTES)
         .with_handler(Arc::new(Handler {
             gathered: tokio::sync::Mutex::new(Some(tx)),
             control: Arc::downgrade(&control),
@@ -311,6 +573,18 @@ pub async fn answer(
         .context("missing local answer")?;
     let sdp = local.sdp;
     tokio::spawn(async move {
+        let controller_task = ChannelTask(tokio::spawn(run_controller(
+            controller,
+            Arc::clone(&control),
+            streams.policy,
+            streams.applied,
+            metrics_rx,
+            status_tx,
+        )));
+        let status_task = ChannelTask(tokio::spawn(publish_status(
+            Arc::clone(&control),
+            status_rx,
+        )));
         let audio_task = if let (Some((audio_track, audio_sender)), Some(audio_frames)) =
             (audio_track_and_sender, streams.audio)
         {
@@ -322,12 +596,15 @@ pub async fn answer(
         } else {
             None
         };
-        if let Err(err) = stream(track, sender, streams.video, credential_digest).await {
+        if let Err(err) = stream(track, sender, streams.video, credential_digest, metrics_tx).await
+        {
             tracing::warn!("stream stopped: {err:#}");
         }
         if let Some(task) = audio_task {
             task.abort();
         }
+        drop(controller_task);
+        drop(status_task);
         control.stop().await;
         let _ = pc.close().await;
     });
@@ -339,6 +616,7 @@ async fn stream(
     sender: Arc<dyn RtpSender>,
     mut frames: tokio::sync::mpsc::Receiver<crate::capture::EncodedFrame>,
     credential_digest: String,
+    metrics: watch::Sender<Option<crate::adaptive::HostMetrics>>,
 ) -> Result<()> {
     let payload = sender
         .get_parameters()
@@ -371,6 +649,8 @@ async fn stream(
             }
             last_credential_check = Instant::now();
         }
+        // Latest-only diagnostics never block media or discard encoded frames.
+        metrics.send_replace(Some(frame.metrics));
         track
             .sample_writer(ssrc, payload)
             .write_sample(&Sample {
