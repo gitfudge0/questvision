@@ -170,7 +170,9 @@
       xrButton: $('xr-button'), xrControls: $('xr-controls'), xrOverlay: $('xr-overlay'), xrDistance: $('xr-distance'), xrScale: $('xr-scale')
     };
     const storeKey = 'questdisplay.device_token.v1';
+    const controlMessageLimit = 4096;
     const state = { token: null, requestId: null, pc: null, stream: null, audioTrack: null, audioRequested: false, connectSerial: 0, reconnectTimer: null, statsTimer: null, statsPrev: null, failures: 0, controls: false, stop: false, status: null,
+      adaptationMode: 'adaptive', control: null, controlAvailable: false, telemetrySequence: 0, pendingTelemetry: null, hostStatus: null,
       xrSupported: false, xrMode: null, xr: null, xrDistance: 1.8, xrScale: 1, xrCurved: false };
 
     try { state.token = localStorage.getItem(storeKey); } catch (_) { /* Storage may be disabled. Pairing still works for this tab. */ }
@@ -313,6 +315,12 @@
       state.statsTimer = null;
       state.statsPrev = null;
       state.connectSerial++;
+      const control = state.control;
+      state.control = null;
+      state.controlAvailable = false;
+      state.pendingTelemetry = null;
+      state.hostStatus = null;
+      if (control) { control.onopen = null; control.onmessage = null; control.onclose = null; control.onerror = null; control.close(); }
       const pc = state.pc;
       state.pc = null;
       if (pc) { pc.ontrack = null; pc.onconnectionstatechange = null; pc.close(); }
@@ -377,6 +385,7 @@
       setMessage('Negotiating a local WebRTC connection…');
       const pc = new RTCPeerConnection({ iceServers: [], bundlePolicy: 'max-bundle' });
       state.pc = pc;
+      createControlChannel(pc, serial);
       const stream = new MediaStream();
       state.stream = stream;
       ui.video.srcObject = stream;
@@ -439,7 +448,7 @@
         await pc.setLocalDescription(offer);
         await waitForIce(pc);
         if (serial !== state.connectSerial) return;
-        const body = { type: 'offer', sdp: pc.localDescription.sdp, display_id: ui.display.value };
+        const body = { type: 'offer', sdp: pc.localDescription.sdp, display_id: ui.display.value, mode: state.adaptationMode };
         if (state.controls) {
           body.quality = ui.qualitySelect.value;
           body.fps = Number(ui.fpsSelect.value);
@@ -469,30 +478,109 @@
       state.reconnectTimer = setTimeout(() => { if (state.token && !state.stop && !document.hidden) afterPairing(); }, delay);
     }
     function textValue(id, value) { $(id).textContent = value; }
+    function renderAdaptiveStatus(status) {
+      state.hostStatus = status;
+    }
+    function validStreamSettings(settings) {
+      return settings && ['performance', 'balanced', 'quality'].includes(settings.preset)
+        && Number.isSafeInteger(settings.fps) && settings.fps > 0
+        && Number.isSafeInteger(settings.bitrate_mbps) && settings.bitrate_mbps > 0;
+    }
+    function receiveHostStatus(event) {
+      if (typeof event.data !== 'string' || new TextEncoder().encode(event.data).byteLength > controlMessageLimit) return;
+      try {
+        const message = JSON.parse(event.data);
+        const status = message?.data;
+        if (message?.type !== 'status' || !status || !['adaptive', 'fixed'].includes(status.mode)
+          || !validStreamSettings(status.ceiling) || !validStreamSettings(status.effective)
+          || !['stable', 'network_pressure', 'host_pressure', 'combined_pressure', 'browser_feedback_unavailable', 'host_feedback_unavailable', 'at_lowest_tier', 'apply_failed'].includes(status.reason)
+          || typeof status.browser_feedback_available !== 'boolean' || typeof status.host_feedback_available !== 'boolean'
+          || (status.error != null && typeof status.error !== 'string')) return;
+        renderAdaptiveStatus(status);
+      } catch (_) { /* Invalid control messages cannot affect media playback. */ }
+    }
+    function createControlChannel(pc, serial) {
+      try {
+        const control = pc.createDataChannel('questdisplay-control');
+        state.control = control;
+        const current = () => serial === state.connectSerial && state.pc === pc && state.control === control;
+        control.onopen = () => { if (current()) state.controlAvailable = true; };
+        control.onmessage = event => { if (current()) receiveHostStatus(event); };
+        control.onclose = () => { if (current()) state.controlAvailable = false; };
+        control.onerror = () => { if (current()) state.controlAvailable = false; };
+      } catch (_) { /* Control telemetry is optional; continue negotiating video. */ }
+    }
+    function sendPendingTelemetry() {
+      const control = state.control;
+      if (!state.pendingTelemetry || !control || control.readyState !== 'open' || control.bufferedAmount !== 0) return;
+      const payload = JSON.stringify(state.pendingTelemetry);
+      if (new TextEncoder().encode(payload).byteLength > controlMessageLimit) { state.pendingTelemetry = null; return; }
+      try {
+        control.send(payload);
+        state.pendingTelemetry = null;
+      } catch (_) { /* Retain only the latest sample for the next interval. */ }
+    }
+    function nonnegativeMetric(value) {
+      return Number.isFinite(value) && value >= 0 ? value : null;
+    }
+    function counterMetric(value, signed = false) {
+      return Number.isSafeInteger(value) && (signed || value >= 0) ? value : null;
+    }
     function startStats(pc, serial) {
       clearInterval(state.statsTimer);
       state.statsPrev = null;
+      let sampling = false;
       state.statsTimer = setInterval(async () => {
-        if (serial !== state.connectSerial || pc.connectionState !== 'connected') return;
+        if (sampling || serial !== state.connectSerial || pc.connectionState !== 'connected') return;
+        sampling = true;
         try {
-          const report = await pc.getStats();
+          let report;
+          try { report = await pc.getStats(); }
+          catch (_) { report = new Map(); }
+          if (serial !== state.connectSerial || state.pc !== pc || pc.connectionState !== 'connected') return;
           let inbound = null, audioInbound = null, pair = null, codec = null;
           report.forEach(item => {
-            if (item.type === 'inbound-rtp' && item.kind === 'video' && !item.isRemote) inbound = item;
-            if (item.type === 'inbound-rtp' && item.kind === 'audio' && !item.isRemote) audioInbound = item;
-            if (item.type === 'candidate-pair' && item.state === 'succeeded' && (item.nominated || item.selected)) pair = item;
+            if (item.type === 'inbound-rtp' && (item.kind || item.mediaType) === 'video' && !item.isRemote) inbound = item;
+            if (item.type === 'inbound-rtp' && (item.kind || item.mediaType) === 'audio' && !item.isRemote) audioInbound = item;
           });
-          if (!inbound) return;
-          if (inbound.codecId) codec = report.get(inbound.codecId);
+          const transport = inbound?.transportId ? report.get(inbound.transportId) : null;
+          if (transport?.selectedCandidatePairId) pair = report.get(transport.selectedCandidatePairId);
+          if (!pair) report.forEach(item => {
+            if (item.type === 'transport' && item.selectedCandidatePairId) pair = report.get(item.selectedCandidatePairId) || pair;
+          });
+          if (!pair) {
+            const nominated = [];
+            report.forEach(item => {
+              if (item.type !== 'candidate-pair' || item.state !== 'succeeded') return;
+              if (item.selected) pair = item;
+              if (item.nominated) nominated.push(item);
+            });
+            if (!pair && nominated.length === 1) pair = nominated[0];
+          }
+          if (inbound?.codecId) codec = report.get(inbound.codecId);
           if (audioInbound?.codecId) textValue('diag-audio-codec', report.get(audioInbound.codecId)?.mimeType?.replace('audio/', '') || 'Unknown');
           const previous = state.statsPrev;
-          const seconds = previous ? (inbound.timestamp - previous.timestamp) / 1000 : 0;
-          const bitrate = seconds > 0 ? (8 * (inbound.bytesReceived - previous.bytesReceived) / seconds / 1e6) : null;
-          const fps = seconds > 0 && inbound.framesDecoded != null && previous.framesDecoded != null ? (inbound.framesDecoded - previous.framesDecoded) / seconds : inbound.framesPerSecond;
-          state.statsPrev = { timestamp: inbound.timestamp, bytesReceived: inbound.bytesReceived, framesDecoded: inbound.framesDecoded };
-          const rtt = pair?.currentRoundTripTime != null ? pair.currentRoundTripTime * 1000 : null;
-          const width = inbound.frameWidth || ui.video.videoWidth;
-          const height = inbound.frameHeight || ui.video.videoHeight;
+          const seconds = inbound && previous && previous.id === inbound.id ? nonnegativeMetric((inbound.timestamp - previous.timestamp) / 1000) : null;
+          const bytes = counterMetric(inbound?.bytesReceived);
+          const decoded = counterMetric(inbound?.framesDecoded);
+          const bitrateBps = seconds > 0 && bytes !== null && previous.bytesReceived !== null && bytes >= previous.bytesReceived
+            ? counterMetric(Math.round(8 * (bytes - previous.bytesReceived) / seconds)) : null;
+          const bitrate = bitrateBps === null ? null : bitrateBps / 1e6;
+          const fps = seconds > 0 && decoded !== null && previous.framesDecoded !== null && decoded >= previous.framesDecoded
+            ? (decoded - previous.framesDecoded) / seconds : nonnegativeMetric(inbound?.framesPerSecond);
+          state.statsPrev = inbound ? { id: inbound.id, timestamp: inbound.timestamp, bytesReceived: bytes, framesDecoded: decoded } : null;
+          const rtt = nonnegativeMetric(pair?.currentRoundTripTime) === null ? null : nonnegativeMetric(pair.currentRoundTripTime * 1000);
+          const jitter = nonnegativeMetric(inbound?.jitter) === null ? null : nonnegativeMetric(inbound.jitter * 1000);
+          const lost = counterMetric(inbound?.packetsLost, true);
+          const dropped = counterMetric(inbound?.framesDropped);
+          state.pendingTelemetry = { type: 'browser_stats', data: {
+            version: 1, sequence: ++state.telemetrySequence, sampled_at_ms: Math.round(performance.now()),
+            received_bitrate_bps: bitrateBps, packets_lost: lost, jitter_ms: jitter,
+            frames_decoded: decoded, frames_dropped: dropped, rtt_ms: rtt
+          } };
+          sendPendingTelemetry();
+          const width = inbound?.frameWidth || ui.video.videoWidth;
+          const height = inbound?.frameHeight || ui.video.videoHeight;
           textValue('mini-fps', Number.isFinite(fps) ? Math.round(fps) : '—');
           textValue('mini-bitrate', Number.isFinite(bitrate) ? bitrate.toFixed(1) : '—');
           textValue('mini-rtt', Number.isFinite(rtt) ? Math.round(rtt) : '—');
@@ -501,10 +589,11 @@
           textValue('diag-fps', Number.isFinite(fps) ? `${fps.toFixed(1)} fps` : '—');
           textValue('diag-bitrate', Number.isFinite(bitrate) ? `${bitrate.toFixed(1)} Mbps` : '—');
           textValue('diag-rtt', Number.isFinite(rtt) ? `${Math.round(rtt)} ms` : '—');
-          textValue('diag-loss', inbound.packetsLost != null ? `${inbound.packetsLost} packets` : '—');
-          textValue('diag-dropped', inbound.framesDropped != null ? `${inbound.framesDropped} frames` : '—');
-          textValue('diag-jitter', inbound.jitter != null ? `${Math.round(inbound.jitter * 1000)} ms` : '—');
+          textValue('diag-loss', lost === null ? '—' : `${lost} packets`);
+          textValue('diag-dropped', dropped === null ? '—' : `${dropped} frames`);
+          textValue('diag-jitter', jitter === null ? '—' : `${Math.round(jitter)} ms`);
         } catch (_) { /* A closed peer can race with this interval. */ }
+        finally { sampling = false; }
       }, 1000);
     }
 
