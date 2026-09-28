@@ -8,8 +8,8 @@ use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer
 use openh264::{
     OpenH264API,
     encoder::{
-        BitRate, Complexity, Encoder, EncoderConfig, FrameRate, FrameType, IntraFramePeriod, Profile,
-        RateControlMode, UsageType,
+        BitRate, Complexity, Encoder, EncoderConfig, FrameRate, FrameType, IntraFramePeriod,
+        Profile, RateControlMode, UsageType,
     },
     formats::{BgraSliceU8, RgbaSliceU8, YUVBuffer, YUVSource},
 };
@@ -314,7 +314,10 @@ fn create_encoder(settings: StreamSettings) -> Result<Encoder> {
         .background_detection(false)
         .intra_frame_period(IntraFramePeriod::from_num_frames(settings.fps * 2))
         .skip_frames(true);
-    Ok(Encoder::with_api_config(OpenH264API::from_source(), config)?)
+    Ok(Encoder::with_api_config(
+        OpenH264API::from_source(),
+        config,
+    )?)
 }
 
 fn encode(
