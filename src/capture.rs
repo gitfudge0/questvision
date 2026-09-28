@@ -146,8 +146,9 @@ pub async fn start(
                         observed_at.duration_since(capture_delivered_at);
                     // A completed send's wait is only known after it consumes the frame.
                     // Carry it forward; the first sample has no previous observation.
-                    let (queue_wait, queue_saturated) =
-                        previous_queue_observation.unwrap_or((Duration::ZERO, false));
+                    let (queue_wait, queue_saturated) = previous_queue_observation
+                        .map(|(wait, saturated)| (Some(wait), saturated))
+                        .unwrap_or((None, false));
                     let encoded_frame = EncodedFrame {
                         data: result.data,
                         duration,

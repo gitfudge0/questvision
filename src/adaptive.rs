@@ -50,7 +50,7 @@ pub struct HostMetrics {
     pub resize_time: Duration,
     pub color_convert_time: Duration,
     pub encode_time: Duration,
-    pub queue_wait: Duration,
+    pub queue_wait: Option<Duration>,
     pub queue_saturated: bool,
     pub cadence_missed: bool,
     pub frame_age_since_capture_delivery: Duration,
@@ -282,24 +282,30 @@ impl AdaptiveController {
             + sample.color_convert_time.as_secs_f64()
             + sample.encode_time.as_secs_f64();
         let pressure = processing >= budget * self.policy.processing_frame_budget_ratio
-            || sample.queue_wait.as_secs_f64() >= budget * self.policy.queue_frame_budget_ratio
+            || sample.queue_wait.is_some_and(|wait| {
+                wait.as_secs_f64() >= budget * self.policy.queue_frame_budget_ratio
+            })
             || sample.frame_age_since_capture_delivery.as_secs_f64()
                 >= budget * self.policy.frame_age_budget_ratio
             || sample.queue_saturated
             || sample.cadence_missed;
+        let complete = sample.queue_wait.is_some();
         let condition = if pressure {
             Condition::Pressure
-        } else {
+        } else if complete {
             Condition::Healthy
+        } else {
+            Condition::Unknown
         };
         tracing::debug!(
             ?sample,
             ?condition,
+            complete,
             "host controller input; frame age is since capture API delivery"
         );
         self.host.observe(
             condition,
-            true,
+            complete,
             sample.observed_at,
             self.policy.host_freshness,
         );
