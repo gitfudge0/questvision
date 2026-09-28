@@ -91,6 +91,12 @@
     .quality.visible { display: flex; }
     .quality label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
     .quality select { min-width: 105px; }
+    .adaptation { display: flex; flex-wrap: wrap; align-items: start; gap: 14px 22px; border-top: 1px solid var(--line); padding-top: 14px; }
+    .adaptation .field { padding-top: 3px; }
+    .adaptation-readouts { flex: 1 1 520px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px 20px; margin: 0; }
+    .adaptation-readouts dt { color: var(--muted); font-size: 11px; margin-bottom: 5px; }
+    .adaptation-readouts dd { margin: 0; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+    .control-notice { flex-basis: 100%; margin: 0; color: var(--warn); font-size: 12px; line-height: 1.5; }
     .xr-controls { display: none; flex-wrap: wrap; align-items: center; gap: 9px; border-top: 1px solid var(--line); padding-top: 13px; }
     .xr-controls.visible { display: flex; }
     .xr-controls button { min-height: 44px; }
@@ -114,6 +120,8 @@
       .dock-left select { flex: 1; max-width: none; }
       .dock-right { justify-content: space-between; width: 100%; }
       .mini-stats { gap: 12px; }
+      .adaptation .field { width: 100%; }
+      .adaptation select { flex: 1; max-width: none; }
     }
     @media (max-width: 420px) {
       .pair-actions { flex-direction: column; }
@@ -152,6 +160,7 @@
         <div class="dock-right"><button id="audio-button" type="button" hidden>Enable audio</button><button id="reconnect-button" type="button" disabled>Reconnect</button><button id="xr-button" type="button" hidden disabled>Enter XR</button><button id="fullscreen-button" class="primary" type="button" disabled>Fullscreen</button></div>
       </div>
       <div class="quality" id="quality-controls"><label>Quality<select id="quality-select"><option value="balanced">Balanced</option><option value="performance">Performance</option><option value="quality">Quality</option></select></label><label>Frame rate<select id="fps-select"><option value="60">60 fps</option><option value="45">45 fps</option><option value="30">30 fps</option><option value="90">90 fps</option></select></label><label>Bitrate<select id="bitrate-select"><option value="auto">Auto</option><option value="10">10 Mbps</option><option value="20">20 Mbps</option><option value="35">35 Mbps</option><option value="50">50 Mbps</option></select></label></div>
+      <div class="adaptation"><label class="field" for="adaptation-mode">Mode <select id="adaptation-mode"><option value="adaptive">Adaptive</option><option value="fixed">Fixed</option></select></label><dl class="adaptation-readouts"><div><dt>Selected ceiling</dt><dd id="adaptive-ceiling">Balanced · 60 fps · 20 Mbps (unconfirmed)</dd></div><div><dt>Effective stream</dt><dd id="adaptive-effective">Awaiting host confirmation</dd></div><div><dt>Adaptation status</dt><dd id="adaptive-reason" role="status" aria-live="polite">Waiting for connection</dd></div><div><dt>Feedback</dt><dd id="adaptive-feedback">Browser and host feedback unconfirmed</dd></div></dl><p class="control-notice" id="control-notice" role="status" aria-live="polite" hidden></p></div>
       <div class="xr-controls" id="xr-controls"><span class="eyebrow">Experimental XR screen</span><button type="button" data-xr-action="nearer" aria-label="Move XR screen closer">Closer</button><button type="button" data-xr-action="farther" aria-label="Move XR screen farther">Farther</button><span class="xr-readout" id="xr-distance">1.8 m</span><button type="button" data-xr-action="smaller" aria-label="Make XR screen smaller">Smaller</button><button type="button" data-xr-action="larger" aria-label="Make XR screen larger">Larger</button><span class="xr-readout" id="xr-scale">100%</span><button type="button" data-xr-action="curve">Curved</button><button type="button" data-xr-action="recenter">Recenter</button><p class="hint">View only. In XR, the controller trigger recenters the screen. Thumbstick left/right changes size; up/down changes distance. Browser support varies.</p></div>
       <details id="diagnostics"><summary>Connection diagnostics</summary><dl class="diagnostics"><div><dt>Codec</dt><dd id="diag-codec">—</dd></div><div><dt>Audio codec</dt><dd id="diag-audio-codec">Off</dd></div><div><dt>Resolution</dt><dd id="diag-resolution">—</dd></div><div><dt>Decode rate</dt><dd id="diag-fps">—</dd></div><div><dt>Received bitrate</dt><dd id="diag-bitrate">—</dd></div><div><dt>Round trip time</dt><dd id="diag-rtt">—</dd></div><div><dt>Packet loss</dt><dd id="diag-loss">—</dd></div><div><dt>Dropped frames</dt><dd id="diag-dropped">—</dd></div><div><dt>Jitter</dt><dd id="diag-jitter">—</dd></div><div><dt>Connection</dt><dd id="diag-connection">Idle</dd></div><div><dt>Secure context</dt><dd id="diag-secure">—</dd></div></dl><p class="footnote">RTT is network round trip time, not screen to eye latency. Capture and encode timings require host diagnostics.</p></details>
     </footer>
@@ -167,12 +176,14 @@
       pairUi: $('pair-ui'), pairCode: $('pair-code'), pairButton: $('pair-button'), message: $('message'), retry: $('retry-button'),
       display: $('display-select'), audio: $('audio-button'), reconnect: $('reconnect-button'), fullscreen: $('fullscreen-button'), playGate: $('play-gate'), play: $('play-button'),
       quality: $('quality-controls'), qualitySelect: $('quality-select'), fpsSelect: $('fps-select'), bitrateSelect: $('bitrate-select'),
+      adaptationMode: $('adaptation-mode'), ceiling: $('adaptive-ceiling'), effective: $('adaptive-effective'), pressure: $('adaptive-reason'), feedback: $('adaptive-feedback'), controlNotice: $('control-notice'),
       xrButton: $('xr-button'), xrControls: $('xr-controls'), xrOverlay: $('xr-overlay'), xrDistance: $('xr-distance'), xrScale: $('xr-scale')
     };
     const storeKey = 'questdisplay.device_token.v1';
     const controlMessageLimit = 4096;
     const state = { token: null, requestId: null, pc: null, stream: null, audioTrack: null, audioRequested: false, connectSerial: 0, reconnectTimer: null, statsTimer: null, statsPrev: null, failures: 0, controls: false, stop: false, status: null,
       adaptationMode: 'adaptive', control: null, controlAvailable: false, telemetrySequence: 0, pendingTelemetry: null, hostStatus: null,
+      nativeCaptureFps: null, pendingMode: null, pendingCeiling: null, controlTimer: null, channelTimer: null, controlIssue: null,
       xrSupported: false, xrMode: null, xr: null, xrDistance: 1.8, xrScale: 1, xrCurved: false };
 
     try { state.token = localStorage.getItem(storeKey); } catch (_) { /* Storage may be disabled. Pairing still works for this tab. */ }
@@ -320,6 +331,18 @@
       state.controlAvailable = false;
       state.pendingTelemetry = null;
       state.hostStatus = null;
+      state.nativeCaptureFps = null;
+      state.pendingMode = null;
+      state.pendingCeiling = null;
+      clearTimeout(state.controlTimer);
+      state.controlTimer = null;
+      clearTimeout(state.channelTimer);
+      state.channelTimer = null;
+      state.controlIssue = null;
+      ui.effective.textContent = 'Awaiting host confirmation';
+      ui.pressure.textContent = 'Waiting for host status';
+      ui.feedback.textContent = 'Browser and host feedback unconfirmed';
+      renderControlNotice();
       if (control) { control.onopen = null; control.onmessage = null; control.onclose = null; control.onerror = null; control.close(); }
       const pc = state.pc;
       state.pc = null;
@@ -439,6 +462,12 @@
           setMessage('');
           ui.reconnect.disabled = false;
           startStats(pc, serial);
+          if (state.control && !state.controlAvailable) {
+            clearTimeout(state.channelTimer);
+            state.channelTimer = setTimeout(() => {
+              if (serial === state.connectSerial && state.pc === pc && !state.controlAvailable) controlUnavailable();
+            }, 5000);
+          }
         } else if (status === 'failed' || status === 'disconnected') {
           failConnection(new Error(status === 'failed' ? 'The WebRTC connection failed.' : 'The connection was interrupted.'));
         }
@@ -454,6 +483,7 @@
           body.fps = Number(ui.fpsSelect.value);
           if (ui.bitrateSelect.value !== 'auto') body.bitrate_mbps = Number(ui.bitrateSelect.value);
         }
+        state.nativeCaptureFps = body.fps ?? null;
         const answer = await request('/api/offer', { method: 'POST', auth: true, body, timeout: 120000 });
         if (serial !== state.connectSerial) return;
         if (!answer?.sdp || (answer.type && answer.type !== 'answer')) throw new Error('The host returned an invalid WebRTC answer.');
@@ -478,8 +508,96 @@
       state.reconnectTimer = setTimeout(() => { if (state.token && !state.stop && !document.hidden) afterPairing(); }, delay);
     }
     function textValue(id, value) { $(id).textContent = value; }
+    function selectedCeiling() {
+      const preset = ui.qualitySelect.value;
+      const defaults = { performance: 10, balanced: 20, quality: 35 };
+      return { preset, fps: Number(ui.fpsSelect.value), bitrate_mbps: ui.bitrateSelect.value === 'auto' ? defaults[preset] : Number(ui.bitrateSelect.value) };
+    }
+    function formatSettings(settings) {
+      const presets = { performance: 'Performance', balanced: 'Balanced', quality: 'Quality' };
+      return `${presets[settings.preset]} · ${settings.fps} fps · ${settings.bitrate_mbps} Mbps`;
+    }
+    function sameSettings(left, right) {
+      return left && right && left.preset === right.preset && left.fps === right.fps && left.bitrate_mbps === right.bitrate_mbps;
+    }
+    function pressureLabel(reason) {
+      return {
+        stable: 'Stable', network_pressure: 'Network pressure', host_pressure: 'Host load',
+        combined_pressure: 'Network pressure and host load', browser_feedback_unavailable: 'Browser feedback unavailable',
+        host_feedback_unavailable: 'Host feedback unavailable', at_lowest_tier: 'Pressure persists at lowest tier',
+        apply_failed: 'Settings could not be applied'
+      }[reason];
+    }
+    function renderControlNotice() {
+      const selected = selectedCeiling();
+      ui.ceiling.textContent = `${formatSettings(selected)}${sameSettings(state.hostStatus?.ceiling, selected) ? '' : ' (unconfirmed)'}`;
+      const pending = state.pendingMode !== null || state.pendingCeiling !== null;
+      ui.controlNotice.textContent = state.controlIssue || (pending ? 'Waiting for the host to confirm your selection.' : '');
+      ui.controlNotice.hidden = !ui.controlNotice.textContent;
+    }
+    function restartRequired(message) {
+      state.controlIssue = `Restart required. ${message} Use Reconnect to apply your selection.`;
+      renderControlNotice();
+    }
     function renderAdaptiveStatus(status) {
       state.hostStatus = status;
+      if (state.nativeCaptureFps === null) state.nativeCaptureFps = status.ceiling.fps;
+      ui.effective.textContent = formatSettings(status.effective);
+      ui.pressure.textContent = `${status.mode === 'fixed' ? 'Fixed' : 'Adaptive'} · ${pressureLabel(status.reason)}`;
+      ui.feedback.textContent = `Browser ${state.controlAvailable && status.browser_feedback_available ? 'available' : 'unavailable'} · Host ${status.host_feedback_available ? 'available' : 'unavailable'}`;
+      if (state.pendingMode === status.mode) state.pendingMode = null;
+      if (sameSettings(state.pendingCeiling, status.ceiling)) state.pendingCeiling = null;
+      if (status.reason === 'apply_failed' || status.error) {
+        state.pendingMode = null;
+        state.pendingCeiling = null;
+        restartRequired(status.error || 'The host could not apply these settings.');
+      } else if (state.controlAvailable && status.mode === state.adaptationMode && sameSettings(status.ceiling, selectedCeiling())) {
+        state.controlIssue = null;
+      }
+      if (state.pendingMode === null && state.pendingCeiling === null) {
+        clearTimeout(state.controlTimer);
+        state.controlTimer = null;
+      }
+      renderControlNotice();
+    }
+    function controlUnavailable() {
+      state.controlAvailable = false;
+      state.pendingMode = null;
+      state.pendingCeiling = null;
+      clearTimeout(state.controlTimer);
+      state.controlTimer = null;
+      ui.feedback.textContent = 'Browser feedback unavailable · Host feedback unconfirmed';
+      ui.pressure.textContent = state.hostStatus ? `${state.hostStatus.mode === 'fixed' ? 'Fixed' : 'Adaptive'} · Control channel unavailable` : 'Control channel unavailable';
+      restartRequired('Live controls and browser feedback are unavailable. Video can continue with available host feedback.');
+    }
+    function changeStreamControl(type, data) {
+      renderControlNotice();
+      if (!state.pc) return;
+      if (type === 'set_ceiling' && state.nativeCaptureFps !== null && data.fps > state.nativeCaptureFps) {
+        restartRequired(`The current capture session supports up to ${state.nativeCaptureFps} fps.`);
+        return;
+      }
+      const control = state.control;
+      if (!state.controlAvailable || !control || control.readyState !== 'open' || control.bufferedAmount !== 0) {
+        restartRequired('The host cannot confirm this live change.');
+        return;
+      }
+      const payload = JSON.stringify({ type, data });
+      if (new TextEncoder().encode(payload).byteLength > controlMessageLimit) { restartRequired('The control message is too large.'); return; }
+      try { control.send(payload); }
+      catch (_) { restartRequired('The control message could not be sent.'); return; }
+      if (type === 'set_mode') state.pendingMode = data;
+      else state.pendingCeiling = data;
+      clearTimeout(state.controlTimer);
+      const serial = state.connectSerial;
+      state.controlTimer = setTimeout(() => {
+        if (serial !== state.connectSerial || (state.pendingMode === null && state.pendingCeiling === null)) return;
+        state.pendingMode = null;
+        state.pendingCeiling = null;
+        state.controlTimer = null;
+        restartRequired('The host has not confirmed this change.');
+      }, 5000);
+      renderControlNotice();
     }
     function validStreamSettings(settings) {
       return settings && ['performance', 'balanced', 'quality'].includes(settings.preset)
@@ -504,11 +622,16 @@
         const control = pc.createDataChannel('questdisplay-control');
         state.control = control;
         const current = () => serial === state.connectSerial && state.pc === pc && state.control === control;
-        control.onopen = () => { if (current()) state.controlAvailable = true; };
+        control.onopen = () => {
+          if (!current()) return;
+          state.controlAvailable = true;
+          clearTimeout(state.channelTimer);
+          state.channelTimer = null;
+        };
         control.onmessage = event => { if (current()) receiveHostStatus(event); };
-        control.onclose = () => { if (current()) state.controlAvailable = false; };
-        control.onerror = () => { if (current()) state.controlAvailable = false; };
-      } catch (_) { /* Control telemetry is optional; continue negotiating video. */ }
+        control.onclose = () => { if (current()) controlUnavailable(); };
+        control.onerror = () => { if (current()) controlUnavailable(); };
+      } catch (_) { controlUnavailable(); /* Control telemetry is optional; continue negotiating video. */ }
     }
     function sendPendingTelemetry() {
       const control = state.control;
@@ -854,7 +977,13 @@
       playVideo().then(() => setMessage('The browser paused playback when sound started. Tap Enable audio again.', 'error'));
     });
     ui.display.addEventListener('change', connect);
-    for (const control of [ui.qualitySelect, ui.fpsSelect, ui.bitrateSelect]) control.addEventListener('change', () => { if (state.controls && state.token) connect(); });
+    ui.adaptationMode.addEventListener('change', () => {
+      state.adaptationMode = ui.adaptationMode.value;
+      changeStreamControl('set_mode', state.adaptationMode);
+    });
+    for (const control of [ui.qualitySelect, ui.fpsSelect, ui.bitrateSelect]) control.addEventListener('change', () => {
+      changeStreamControl('set_ceiling', selectedCeiling());
+    });
     ui.fullscreen.addEventListener('click', async () => {
       try { if (document.fullscreenElement) await document.exitFullscreen(); else await ui.stage.requestFullscreen(); }
       catch (_) { setMessage('Fullscreen is unavailable in this browser. Use the browser window controls.', 'error'); }
