@@ -1,3 +1,4 @@
+mod adaptive;
 mod audio;
 mod capture;
 mod config;

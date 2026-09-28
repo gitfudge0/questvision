@@ -1,20 +1,94 @@
 use crate::config::Config;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Preset {
     Performance,
     Balanced,
     Quality,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StreamSettings {
     pub preset: Preset,
     pub fps: u32,
     pub bitrate_mbps: u32,
 }
 
+// Provisional coordinated tiers; tune only after sustained measurements.
+pub const ADAPTIVE_TIER_CANDIDATES: &[StreamSettings] = &[
+    StreamSettings {
+        preset: Preset::Quality,
+        fps: 60,
+        bitrate_mbps: 35,
+    },
+    StreamSettings {
+        preset: Preset::Balanced,
+        fps: 60,
+        bitrate_mbps: 20,
+    },
+    StreamSettings {
+        preset: Preset::Balanced,
+        fps: 45,
+        bitrate_mbps: 14,
+    },
+    StreamSettings {
+        preset: Preset::Balanced,
+        fps: 30,
+        bitrate_mbps: 10,
+    },
+    StreamSettings {
+        preset: Preset::Performance,
+        fps: 30,
+        bitrate_mbps: 8,
+    },
+    StreamSettings {
+        preset: Preset::Performance,
+        fps: 20,
+        bitrate_mbps: 4,
+    },
+    StreamSettings {
+        preset: Preset::Performance,
+        fps: 15,
+        bitrate_mbps: 2,
+    },
+];
+
+impl Preset {
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Performance => 0,
+            Self::Balanced => 1,
+            Self::Quality => 2,
+        }
+    }
+}
+
 impl StreamSettings {
+    pub fn is_valid(self) -> bool {
+        (15..=120).contains(&self.fps) && (2..=80).contains(&self.bitrate_mbps)
+    }
+
+    /// Highest to lowest, with the exact selected ceiling first.
+    pub fn tier_candidates(self) -> Vec<Self> {
+        let mut tiers = vec![self];
+        for candidate in ADAPTIVE_TIER_CANDIDATES {
+            let bounded = Self {
+                preset: if candidate.preset.rank() <= self.preset.rank() {
+                    candidate.preset
+                } else {
+                    self.preset
+                },
+                fps: candidate.fps.min(self.fps),
+                bitrate_mbps: candidate.bitrate_mbps.min(self.bitrate_mbps),
+            };
+            if tiers.last() != Some(&bounded) {
+                tiers.push(bounded);
+            }
+        }
+        tiers
+    }
+
     pub fn from_offer(
         config: &Config,
         quality: Option<&str>,
