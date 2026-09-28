@@ -1,4 +1,5 @@
 use crate::{
+    adaptive::HostMetrics,
     audio::{EncodedAudio, Packetizer},
     quality::{Preset, StreamSettings},
 };
@@ -28,6 +29,7 @@ pub struct EncodedFrame {
     pub resize_time: Duration,
     pub color_convert_time: Duration,
     pub encode_time: Duration,
+    pub metrics: HostMetrics,
     pub output_size: (u32, u32),
 }
 
@@ -128,27 +130,52 @@ pub async fn start(
         let mut resizer = Resizer::new();
         let mut yuv_buffer = None;
         let mut previous: Option<Instant> = None;
+        let frame_budget = Duration::from_secs_f64(1.0 / fps as f64);
+        let mut previous_queue_observation: Option<(Duration, bool)> = None;
         while let Ok(frame) = capture.video().recv() {
-            let now = Instant::now();
-            let duration = previous
-                .map(|prev| now.duration_since(prev))
-                .unwrap_or(Duration::from_secs_f64(1.0 / fps as f64));
-            previous = Some(now);
+            // Delivery is when recv returns, not the native desktop capture time.
+            let capture_delivered_at = Instant::now();
+            let capture_receive_interval =
+                previous.map(|prev| capture_delivered_at.duration_since(prev));
+            let duration = capture_receive_interval.unwrap_or(frame_budget);
+            previous = Some(capture_delivered_at);
             match encode(&mut encoder, &mut resizer, &mut yuv_buffer, frame, settings) {
                 Ok(result) if !result.data.is_empty() => {
-                    if frames_tx
-                        .blocking_send(EncodedFrame {
-                            data: result.data,
-                            duration,
+                    let observed_at = Instant::now();
+                    let frame_age_since_capture_delivery =
+                        observed_at.duration_since(capture_delivered_at);
+                    // A completed send's wait is only known after it consumes the frame.
+                    // Carry it forward; the first sample has no previous observation.
+                    let (queue_wait, queue_saturated) =
+                        previous_queue_observation.unwrap_or((Duration::ZERO, false));
+                    let encoded_frame = EncodedFrame {
+                        data: result.data,
+                        duration,
+                        resize_time: result.resize_time,
+                        color_convert_time: result.color_convert_time,
+                        encode_time: result.encode_time,
+                        metrics: HostMetrics {
+                            observed_at,
+                            capture_receive_interval,
                             resize_time: result.resize_time,
                             color_convert_time: result.color_convert_time,
                             encode_time: result.encode_time,
-                            output_size: result.output_size,
-                        })
-                        .is_err()
-                    {
+                            queue_wait,
+                            queue_saturated,
+                            // Allow receive jitter until a whole expected interval is missed.
+                            cadence_missed: frame_age_since_capture_delivery > frame_budget
+                                || capture_receive_interval
+                                    .is_some_and(|interval| interval >= frame_budget * 2),
+                            frame_age_since_capture_delivery,
+                        },
+                        output_size: result.output_size,
+                    };
+                    let queue_saturated = frames_tx.capacity() == 0;
+                    let send_started = Instant::now();
+                    if frames_tx.blocking_send(encoded_frame).is_err() {
                         break;
                     }
+                    previous_queue_observation = Some((send_started.elapsed(), queue_saturated));
                 }
                 Ok(_) => {}
                 Err(e) => {
