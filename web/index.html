@@ -184,6 +184,7 @@
     const state = { token: null, requestId: null, pc: null, stream: null, audioTrack: null, audioRequested: false, connectSerial: 0, reconnectTimer: null, statsTimer: null, statsPrev: null, failures: 0, controls: false, stop: false, status: null,
       adaptationMode: 'adaptive', control: null, controlAvailable: false, telemetrySequence: 0, pendingTelemetry: null, hostStatus: null,
       nativeCaptureFps: null, pendingMode: null, pendingCeiling: null, controlTimer: null, channelTimer: null, controlIssue: null,
+      controlOutbox: [], outboxTimer: null,
       xrSupported: false, xrMode: null, xr: null, xrDistance: 1.8, xrScale: 1, xrCurved: false };
 
     try { state.token = localStorage.getItem(storeKey); } catch (_) { /* Storage may be disabled. Pairing still works for this tab. */ }
@@ -334,6 +335,7 @@
       state.nativeCaptureFps = null;
       state.pendingMode = null;
       state.pendingCeiling = null;
+      clearControlOutbox();
       clearTimeout(state.controlTimer);
       state.controlTimer = null;
       clearTimeout(state.channelTimer);
@@ -343,7 +345,7 @@
       ui.pressure.textContent = 'Waiting for host status';
       ui.feedback.textContent = 'Browser and host feedback unconfirmed';
       renderControlNotice();
-      if (control) { control.onopen = null; control.onmessage = null; control.onclose = null; control.onerror = null; control.close(); }
+      if (control) { control.onopen = null; control.onmessage = null; control.onclose = null; control.onerror = null; control.onbufferedamountlow = null; control.close(); }
       const pc = state.pc;
       state.pc = null;
       if (pc) { pc.ontrack = null; pc.onconnectionstatechange = null; pc.close(); }
@@ -532,7 +534,7 @@
       const selected = selectedCeiling();
       ui.ceiling.textContent = `${formatSettings(selected)}${sameSettings(state.hostStatus?.ceiling, selected) ? '' : ' (unconfirmed)'}`;
       const pending = state.pendingMode !== null || state.pendingCeiling !== null;
-      ui.controlNotice.textContent = state.controlIssue || (pending ? 'Waiting for the host to confirm your selection.' : '');
+      ui.controlNotice.textContent = state.controlIssue || (state.controlOutbox.length ? 'Your selection is queued while the control channel drains.' : pending ? 'Waiting for the host to confirm your selection.' : '');
       ui.controlNotice.hidden = !ui.controlNotice.textContent;
     }
     function restartRequired(message) {
@@ -564,6 +566,7 @@
       state.controlAvailable = false;
       state.pendingMode = null;
       state.pendingCeiling = null;
+      clearControlOutbox();
       clearTimeout(state.controlTimer);
       state.controlTimer = null;
       ui.feedback.textContent = 'Browser feedback unavailable · Host feedback unconfirmed';
@@ -571,6 +574,15 @@
       restartRequired('Live controls and browser feedback are unavailable. Video can continue with available host feedback.');
     }
     function changeStreamControl(type, data) {
+      if (type !== 'set_mode' && type !== 'set_ceiling') return;
+      state.controlOutbox = state.controlOutbox.filter(message => message.type !== type);
+      if (!state.controlOutbox.length) clearControlOutbox();
+      if (type === 'set_mode') state.pendingMode = null;
+      else state.pendingCeiling = null;
+      if (state.pendingMode === null && state.pendingCeiling === null) {
+        clearTimeout(state.controlTimer);
+        state.controlTimer = null;
+      }
       renderControlNotice();
       if (!state.pc) return;
       if (type === 'set_ceiling' && state.nativeCaptureFps !== null && data.fps > state.nativeCaptureFps) {
@@ -578,16 +590,46 @@
         return;
       }
       const control = state.control;
-      if (!state.controlAvailable || !control || control.readyState !== 'open' || control.bufferedAmount !== 0) {
+      if (!state.controlAvailable || !control || control.readyState !== 'open') {
         restartRequired('The host cannot confirm this live change.');
         return;
       }
       const payload = JSON.stringify({ type, data });
       if (new TextEncoder().encode(payload).byteLength > controlMessageLimit) { restartRequired('The control message is too large.'); return; }
-      try { control.send(payload); }
-      catch (_) { restartRequired('The control message could not be sent.'); return; }
-      if (type === 'set_mode') state.pendingMode = data;
-      else state.pendingCeiling = data;
+      state.controlOutbox.push({ type, data, payload });
+      state.controlIssue = null;
+      clearTimeout(state.outboxTimer);
+      const serial = state.connectSerial;
+      state.outboxTimer = setTimeout(() => {
+        if (serial !== state.connectSerial || state.control !== control || !state.controlOutbox.length) return;
+        clearControlOutbox();
+        restartRequired('The control channel did not drain, so this selection was not sent.');
+      }, 5000);
+      flushControlOutbox();
+      renderControlNotice();
+    }
+    function clearControlOutbox() {
+      state.controlOutbox = [];
+      clearTimeout(state.outboxTimer);
+      state.outboxTimer = null;
+    }
+    function flushControlOutbox() {
+      const control = state.control;
+      if (!state.controlOutbox.length || !state.controlAvailable || !control || control.readyState !== 'open') return;
+      while (state.controlOutbox.length && control.bufferedAmount === 0) {
+        const message = state.controlOutbox[0];
+        try { control.send(message.payload); }
+        catch (_) { clearControlOutbox(); restartRequired('The control message could not be sent.'); return; }
+        state.controlIssue = null;
+        state.controlOutbox.shift();
+        if (message.type === 'set_mode') state.pendingMode = message.data;
+        else state.pendingCeiling = message.data;
+        startControlConfirmationTimer();
+      }
+      if (!state.controlOutbox.length) clearControlOutbox();
+      renderControlNotice();
+    }
+    function startControlConfirmationTimer() {
       clearTimeout(state.controlTimer);
       const serial = state.connectSerial;
       state.controlTimer = setTimeout(() => {
@@ -597,7 +639,6 @@
         state.controlTimer = null;
         restartRequired('The host has not confirmed this change.');
       }, 5000);
-      renderControlNotice();
     }
     function validStreamSettings(settings) {
       return settings && ['performance', 'balanced', 'quality'].includes(settings.preset)
@@ -621,19 +662,23 @@
       try {
         const control = pc.createDataChannel('questdisplay-control');
         state.control = control;
+        control.bufferedAmountLowThreshold = 0;
         const current = () => serial === state.connectSerial && state.pc === pc && state.control === control;
         control.onopen = () => {
           if (!current()) return;
           state.controlAvailable = true;
           clearTimeout(state.channelTimer);
           state.channelTimer = null;
+          flushControlOutbox();
         };
+        control.onbufferedamountlow = () => { if (current()) flushControlOutbox(); };
         control.onmessage = event => { if (current()) receiveHostStatus(event); };
         control.onclose = () => { if (current()) controlUnavailable(); };
         control.onerror = () => { if (current()) controlUnavailable(); };
       } catch (_) { controlUnavailable(); /* Control telemetry is optional; continue negotiating video. */ }
     }
     function sendPendingTelemetry() {
+      flushControlOutbox();
       const control = state.control;
       if (!state.pendingTelemetry || !control || control.readyState !== 'open' || control.bufferedAmount !== 0) return;
       const payload = JSON.stringify(state.pendingTelemetry);
