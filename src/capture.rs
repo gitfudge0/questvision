@@ -18,6 +18,7 @@ use scrcap::{
     error::{CaptureError, Unsupported},
 };
 use std::{
+    sync::Arc,
     thread,
     time::{Duration, Instant},
 };
@@ -34,10 +35,56 @@ pub struct EncodedFrame {
 }
 
 pub struct CaptureStreams {
+    pub shutdown: CaptureShutdown,
     pub video: mpsc::Receiver<EncodedFrame>,
     pub audio: Option<mpsc::Receiver<EncodedAudio>>,
     pub policy: watch::Sender<StreamSettings>,
     pub applied: watch::Receiver<Option<PolicyApplyResult>>,
+}
+
+#[derive(Clone)]
+pub struct CaptureShutdown(Arc<CaptureShutdownInner>);
+
+struct CaptureShutdownInner {
+    stop: crossbeam_channel::Sender<()>,
+    done: watch::Receiver<bool>,
+}
+
+impl Drop for CaptureShutdownInner {
+    fn drop(&mut self) {
+        let _ = self.stop.try_send(());
+    }
+}
+
+impl CaptureShutdown {
+    pub fn stop(&self) {
+        let _ = self.0.stop.try_send(());
+    }
+
+    pub async fn wait(&self) {
+        let mut done = self.0.done.clone();
+        while !*done.borrow_and_update() {
+            if done.changed().await.is_err() {
+                break;
+            }
+        }
+    }
+}
+
+struct CaptureStartGuard(Option<CaptureShutdown>);
+impl Drop for CaptureStartGuard {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.0.as_ref() {
+            shutdown.stop();
+        }
+    }
+}
+
+struct CaptureCompletion(watch::Sender<bool>);
+impl Drop for CaptureCompletion {
+    fn drop(&mut self) {
+        self.0.send_replace(true);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -51,6 +98,23 @@ pub async fn start(
     display: &str,
     audio_requested: bool,
 ) -> Result<CaptureStreams> {
+    start_monitored(settings, display, audio_requested, |_| {}).await
+}
+
+pub(crate) async fn start_monitored(
+    settings: StreamSettings,
+    display: &str,
+    audio_requested: bool,
+    track_shutdown: impl FnOnce(CaptureShutdown),
+) -> Result<CaptureStreams> {
+    let (stop_tx, stop_rx) = crossbeam_channel::bounded(1);
+    let (done_tx, done_rx) = watch::channel(false);
+    let shutdown = CaptureShutdown(Arc::new(CaptureShutdownInner {
+        stop: stop_tx,
+        done: done_rx,
+    }));
+    let mut start_guard = CaptureStartGuard(Some(shutdown.clone()));
+    track_shutdown(shutdown.clone());
     let (frames_tx, frames_rx) = mpsc::channel(1);
     let (audio_tx, audio_rx) = mpsc::channel(8);
     let (ready_tx, ready_rx) = oneshot::channel();
@@ -59,6 +123,7 @@ pub async fn start(
     let display = display.to_owned();
     let fps = settings.fps;
     thread::spawn(move || {
+        let _completion = CaptureCompletion(done_tx);
         let target = if display == "primary" {
             Target::Primary
         } else if let Ok(n) = display.parse::<isize>() {
@@ -92,9 +157,14 @@ pub async fn start(
                 return;
             }
         };
+        if stop_rx.try_recv().is_ok() || ready_tx.is_closed() {
+            capture.terminate();
+            return;
+        }
         let mut encoder = match create_encoder(settings) {
             Ok(e) => e,
             Err(e) => {
+                capture.terminate();
                 let _ = ready_tx.send(Err(anyhow::anyhow!("H.264 encoder failed: {e}")));
                 return;
             }
@@ -110,14 +180,23 @@ pub async fn start(
             }
         });
         let audio_available = audio_encoder.is_some();
-        if let (Some(receiver), Some(mut encoder)) = (audio_capture, audio_encoder.take()) {
-            if let Err(error) = encoder.set_bitrate(opus::Bitrate::Bits(128_000)) {
-                tracing::warn!("Opus bitrate configuration failed: {error}");
-            }
-            thread::spawn(move || encode_audio(receiver, audio_tx, encoder));
-        }
+        let audio_task =
+            if let (Some(receiver), Some(mut encoder)) = (audio_capture, audio_encoder.take()) {
+                if let Err(error) = encoder.set_bitrate(opus::Bitrate::Bits(128_000)) {
+                    tracing::warn!("Opus bitrate configuration failed: {error}");
+                }
+                Some(thread::spawn(move || {
+                    encode_audio(receiver, audio_tx, encoder)
+                }))
+            } else {
+                None
+            };
         if ready_tx.send(Ok(audio_available)).is_err() {
             capture.terminate();
+            drop(capture);
+            if let Some(task) = audio_task {
+                let _ = task.join();
+            }
             return;
         }
         let mut resizer = Resizer::new();
@@ -127,7 +206,14 @@ pub async fn start(
         let mut next_eligible: Option<Instant> = None;
         let mut effective_settings = settings;
         let mut previous_queue_observation: Option<(Duration, bool)> = None;
-        while let Ok(mut frame) = capture.video().recv() {
+        loop {
+            let mut frame = crossbeam_channel::select! {
+                recv(stop_rx) -> _ => break,
+                recv(capture.video()) -> frame => match frame {
+                    Ok(frame) => frame,
+                    Err(_) => break,
+                },
+            };
             // Delivery is when recv returns, not the native desktop capture time.
             let capture_delivered_at = Instant::now();
             let capture_receive_interval =
@@ -275,12 +361,18 @@ pub async fn start(
             }
         }
         capture.terminate();
+        drop(capture);
+        if let Some(task) = audio_task {
+            let _ = task.join();
+        }
     });
     let audio_available = tokio::time::timeout(Duration::from_secs(110), ready_rx)
         .await
         .context("screen capture permission timed out")?
         .context("capture thread exited")??;
+    start_guard.0.take();
     Ok(CaptureStreams {
+        shutdown,
         video: frames_rx,
         audio: audio_available.then_some(audio_rx),
         policy: policy_tx,

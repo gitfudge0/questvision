@@ -3,9 +3,10 @@
 //! The functions here never install a driver. `remove` accepts only an output
 //! recorded by a successful `create` call in this process and compositor session.
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::Result;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub enum Compositor {
     Hyprland,
     Sway,
@@ -13,6 +14,7 @@ pub enum Compositor {
 
 #[derive(Clone, Debug)]
 pub struct Capability {
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub compositor: Option<Compositor>,
     pub available: bool,
     pub reason: String,
@@ -29,6 +31,7 @@ pub struct VirtualDisplay {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;
+    use anyhow::{Context, anyhow, bail};
     use serde_json::Value;
     use std::{
         collections::{HashMap, HashSet},

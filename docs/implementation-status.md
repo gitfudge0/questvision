@@ -2,6 +2,8 @@
 
 Updated 2026-09-28. This file describes checked-in code, not the product brief. Status values are **Implemented + tested**, **Implemented + source/build checked; runtime verification pending**, **Implemented + awaiting physical-platform verification**, **Blocked by documented OS limitation**, and **NOT IMPLEMENTED**. The Rust unit suite passed 14/14 on Linux x86_64, and Clippy passed with warnings denied before the adaptive-stream change. For the adaptive-stream change, `cargo fmt --all -- --check` and `cargo check --locked` passed; no automated tests were run. Chromium paired and decoded a real Linux Wayland desktop stream. After tuning, the 120-frame host benchmark measured 41.1 fps at 1152×720 Performance and 20.7 fps at 1728×1080 Balanced; final live Chromium UI readings were about 43 and 23 fps. A generated Linux desktop tone reached the live Chromium audio track through Opus. Audible speaker output, Quest playback, and A/V synchronization were not tested. No macOS or Windows playback test exists. The new adaptive controls, control-channel exchange, and live policy transitions have not been exercised in a browser or on a physical client; no near-instant or glass-to-glass result is established.
 
+For the GPUI dashboard change on macOS arm64, `cargo check --locked --all-targets`, `cargo build --locked`, `cargo fmt --all -- --check`, and `cargo test --locked` passed (20 tests). The added backend tests cover confirmed listening, bind failure, port release after stopping, cancellation before startup finishes, private pairing expiry/redaction, and bounded session history. Clippy completed with warnings from existing adaptive/virtual-display code; the strict warnings-denied lint is not green on this platform. GUI rendering, live capture, and physical Quest use still need runtime verification.
+
 ## Core and transport
 
 | Capability | Status | Evidence or remaining work |
@@ -17,7 +19,7 @@ Updated 2026-09-28. This file describes checked-in code, not the product brief. 
 | Browser reconnect | Implemented + awaiting physical-platform verification | Client logic exists; no interruption/reconnect test. |
 | Capture denial keeps browser pairing | Implemented + awaiting physical-platform verification | Server maps capture refusal to HTTP 422; browser clears pairing for 401/403 only. This fix compiles and has tests, but no post-fix live denial test. |
 | Multiple simultaneous clients | NOT IMPLEMENTED | No verified test. |
-| Host-code pairing | Implemented + tested | Unit tests cover single use, peer binding, cooldown, and attempt limit; live Chromium paired through the API. Requires interactive terminal. |
+| Host-code pairing | Implemented + tested | Unit tests cover single use, peer binding, cooldown, and attempt limit; live Chromium paired through the API. CLI pairing requires an interactive terminal; GUI pairing goes only through a private in-process channel. |
 | Browser bearer credential authorization | Implemented + tested | Live browser received a token and accessed the protected display list. |
 | Credential persistence across host restart | Implemented + awaiting physical-platform verification | Code stores a SHA-256 token digest in native config; restart test pending. |
 | Paired-device IDs and revoke commands | Implemented + tested | CLI lists digest-derived IDs. In isolated live Chromium smoke, `revoke <id>` changed protected API access from 200 to 401 and reset browser pairing; server logged stream revocation. A separate isolated CLI test used `revoke-all` on 3 stored credentials, then `devices` reported none. Concurrent-server behavior for `revoke-all` was not tested. |
@@ -83,14 +85,15 @@ Updated 2026-09-28. This file describes checked-in code, not the product brief. 
 
 | Capability | Status | Evidence or remaining work |
 | --- | --- | --- |
-| `start`, `devices`, `displays`, `config`, `doctor` command parsing | Implemented + awaiting physical-platform verification | Commands compile; doctor and display/device output are basic. Runtime smoke pending. |
+| `start`, `gui`, `devices`, `displays`, `config`, `doctor` command parsing | Implemented + awaiting physical-platform verification | Commands compile; doctor and display/device output are basic. Runtime smoke pending. |
 | `stop` and `status` commands | NOT IMPLEMENTED | No service manager or command handlers. |
 | Native config directories and first-run certificate | Implemented + awaiting physical-platform verification | Code saves TOML and certificate; no fresh-machine permission test. |
-| User settings for listen, port, FPS, bitrate, display | Implemented + awaiting physical-platform verification | TOML fields and CLI listen/port overrides compile; no normal settings UI. |
+| User settings for listen, port, FPS, bitrate, display | Implemented + awaiting physical-platform verification | TOML fields, CLI listen/port overrides, and GUI settings editing exist. GUI changes apply after stopping and starting the host. |
 | Audio opt-in setting | Implemented + tested | A live Linux release host started with `--audio`; default is off. On unsupported native capture, code falls back to video only, but that fallback lacks a live test. |
 | User settings for input, adaptive quality, virtual output | NOT IMPLEMENTED | No corresponding settings. |
 | Automatic setup and interactive permission guidance | NOT IMPLEMENTED | Certificate, QR, and portal prompts exist, but no verified fresh-machine flow. |
-| Tray/menu-bar host interface | NOT IMPLEMENTED | CLI intended first. |
+| GPUI host dashboard and embedded runtime | Implemented + source/build checked; runtime verification pending | `gui` opens Overview, Devices, Settings, and Diagnostics. Start/stop runs HTTPS/WebRTC in-process; codes reach the GUI through private local state, and fresh host/browser telemetry is labeled by source. The native capture picker is not cancellable by the library: dismiss/complete an already-open picker to finish shutdown. No Linux/Windows/Quest dashboard run has been recorded. |
+| Tray/menu-bar host interface | NOT IMPLEMENTED | A desktop window exists; no tray/menu-bar integration. |
 | Structured logs with secret redaction | NOT IMPLEMENTED | No log audit. |
 | Rust unit tests and lint | Implemented + tested | `cargo test --locked`: 14/14 passed on Linux x86_64, including Opus round trip; `cargo fmt --all -- --check` and Clippy with `-D warnings` passed. |
 | Local Linux x86_64 optimized binary and archive | Implemented + tested | The final local `dist/questdisplay-linux-x86_64.tar.gz` contains the latest unsigned binary, README, LICENSE, and docs. It has not been installed on a fresh machine. The inspected release binary dynamically links libpipewire-0.3 and libdbus, but not libopus. |

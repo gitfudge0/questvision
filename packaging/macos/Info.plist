@@ -18,5 +18,7 @@
 	<string>0.1.0</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Quest Display captures your screen to stream it to your paired browser on your local network.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Quest Display captures desktop audio when enabled to stream it to your paired browser on your local network.</string>
 </dict>
 </plist>

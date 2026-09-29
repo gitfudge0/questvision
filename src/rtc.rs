@@ -31,6 +31,7 @@ use webrtc::{
     media_stream::track_local::{TrackLocal, static_sample::TrackLocalStaticSample},
     peer_connection::{
         PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, RTCIceGatheringState,
+        RTCPeerConnectionState,
     },
     rtp_transceiver::RtpSender,
 };
@@ -236,9 +237,11 @@ async fn run_controller(
     mut applied: watch::Receiver<Option<crate::capture::PolicyApplyResult>>,
     mut host_metrics: watch::Receiver<Option<crate::adaptive::HostMetrics>>,
     status: watch::Sender<crate::adaptive::ControllerUpdate>,
+    (monitor, session_id): (crate::monitor::Monitor, u64),
 ) {
     let mut available = control.available.subscribe();
     let mut browser_was_available = false;
+    let mut last_browser: Option<(Instant, crate::adaptive::BrowserTelemetry)> = None;
     let mut applied_open = true;
     let mut metrics_open = true;
     let mut in_flight = None;
@@ -296,6 +299,29 @@ async fn run_controller(
             if in_flight.is_some() {
                 newer_commands.retain(&command, received_at);
             }
+            if let crate::adaptive::ControlMessage::BrowserStats(sample) = &command {
+                let valid = sample.version == crate::adaptive::TELEMETRY_VERSION
+                    && [sample.jitter_ms, sample.rtt_ms]
+                        .into_iter()
+                        .flatten()
+                        .all(|value| value.is_finite() && value >= 0.0)
+                    && Instant::now()
+                        .checked_duration_since(received_at)
+                        .is_some_and(|age| {
+                            age <= crate::adaptive::PROVISIONAL_POLICY.browser_freshness
+                        })
+                    && last_browser.as_ref().is_none_or(|(last_at, last)| {
+                        received_at > *last_at
+                            && sample.sequence > last.sequence
+                            && sample.sampled_at_ms > last.sampled_at_ms
+                    });
+                if valid {
+                    last_browser = Some((received_at, sample.clone()));
+                    monitor.update_session(session_id, |session| {
+                        session.browser_telemetry = Some(sample.clone())
+                    });
+                }
+            }
             route_control(&mut controller, command, received_at);
         }
         if apply_changed {
@@ -344,7 +370,14 @@ async fn run_controller(
                 newer_commands = NewerCommands::default();
             }
         }
-        status.send_replace(controller.current());
+        let update = controller.current();
+        monitor.update_session(session_id, |session| {
+            if !update.browser_feedback_available {
+                session.browser_telemetry = None;
+            }
+            session.controller = Some(update.clone());
+        });
+        status.send_replace(update);
     }
 }
 
@@ -427,12 +460,44 @@ async fn publish_status(
 }
 
 struct Handler {
+    monitor: crate::monitor::Monitor,
+    session_id: u64,
+    peer_stop: watch::Sender<bool>,
     gathered: tokio::sync::Mutex<Option<oneshot::Sender<()>>>,
     // Avoid a PeerConnection -> handler -> channel -> PeerConnection Arc cycle.
     control: Weak<ControlSession>,
 }
 #[async_trait::async_trait]
 impl PeerConnectionEventHandler for Handler {
+    async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
+        let next = match state {
+            RTCPeerConnectionState::Connected => Some(crate::monitor::SessionState::Streaming),
+            RTCPeerConnectionState::Failed => Some(crate::monitor::SessionState::Error(
+                "WebRTC connection failed".into(),
+            )),
+            RTCPeerConnectionState::Disconnected | RTCPeerConnectionState::Closed => {
+                Some(crate::monitor::SessionState::Closed)
+            }
+            _ => None,
+        };
+        if let Some(next) = next {
+            let terminal = matches!(
+                next,
+                crate::monitor::SessionState::Closed | crate::monitor::SessionState::Error(_)
+            );
+            self.monitor.update_session(self.session_id, |session| {
+                if next != crate::monitor::SessionState::Closed
+                    || !matches!(session.state, crate::monitor::SessionState::Error(_))
+                {
+                    session.state = next;
+                }
+            });
+            if terminal {
+                self.peer_stop.send_replace(true);
+            }
+        }
+    }
+
     async fn on_ice_gathering_state_change(&self, state: RTCIceGatheringState) {
         if state == RTCIceGatheringState::Complete
             && let Some(tx) = self.gathered.lock().await.take()
@@ -460,16 +525,90 @@ impl PeerConnectionEventHandler for Handler {
     }
 }
 
-pub async fn answer(
-    offer_sdp: &str,
-    lan_ip: &str,
-    settings: crate::quality::StreamSettings,
-    mode: crate::adaptive::AdaptationMode,
-    display: &str,
-    credential_digest: String,
-    audio_requested: bool,
-) -> Result<(String, bool)> {
-    let streams = crate::capture::start(settings, display, audio_requested).await?;
+struct CaptureLease(Option<crate::capture::CaptureShutdown>);
+impl Drop for CaptureLease {
+    fn drop(&mut self) {
+        if let Some(shutdown) = &self.0 {
+            shutdown.stop();
+        }
+    }
+}
+
+struct NegotiationCleanup<P: PeerConnection> {
+    pc: Option<P>,
+    capture: crate::capture::CaptureShutdown,
+    control: Arc<ControlSession>,
+    runtime: Arc<crate::monitor::SessionRuntime>,
+    session_id: u64,
+}
+impl<P: PeerConnection> Drop for NegotiationCleanup<P> {
+    fn drop(&mut self) {
+        if let Some(pc) = self.pc.take() {
+            self.capture.stop();
+            let capture = self.capture.clone();
+            let control = self.control.clone();
+            let monitor = self.runtime.monitor.clone();
+            let id = self.session_id;
+            self.runtime.spawn(async move {
+                control.stop().await;
+                let _ = pc.close().await;
+                capture.wait().await;
+                monitor.update_session(id, |session| {
+                    if session.state == crate::monitor::SessionState::Negotiating {
+                        session.state = crate::monitor::SessionState::Closed;
+                    }
+                });
+            });
+        }
+    }
+}
+
+pub(crate) struct AnswerRequest<'a> {
+    pub offer_sdp: &'a str,
+    pub lan_ip: &'a str,
+    pub settings: crate::quality::StreamSettings,
+    pub mode: crate::adaptive::AdaptationMode,
+    pub display: &'a str,
+    pub credential_digest: String,
+    pub audio_requested: bool,
+    pub runtime: Arc<crate::monitor::SessionRuntime>,
+    pub session_id: u64,
+}
+
+pub(crate) async fn answer(request: AnswerRequest<'_>) -> Result<(String, bool)> {
+    let mut stop = request.runtime.stop.subscribe();
+    tokio::select! {
+        result = answer_inner(request) => result,
+        _ = crate::monitor::cancelled(&mut stop) => anyhow::bail!("host stopped during negotiation"),
+    }
+}
+
+async fn answer_inner(request: AnswerRequest<'_>) -> Result<(String, bool)> {
+    let AnswerRequest {
+        offer_sdp,
+        lan_ip,
+        settings,
+        mode,
+        display,
+        credential_digest,
+        audio_requested,
+        runtime,
+        session_id,
+    } = request;
+    let capture_runtime = runtime.clone();
+    let streams =
+        crate::capture::start_monitored(settings, display, audio_requested, move |shutdown| {
+            let mut stop = capture_runtime.stop.subscribe();
+            capture_runtime.spawn(async move {
+                tokio::select! {
+                    _ = shutdown.wait() => return,
+                    _ = crate::monitor::cancelled(&mut stop) => shutdown.stop(),
+                }
+                shutdown.wait().await;
+            });
+        })
+        .await?;
+    let mut capture_lease = CaptureLease(Some(streams.shutdown.clone()));
     let audio_available = streams.audio.is_some();
     let mut media = MediaEngine::default();
     let codec = RTCRtpCodecParameters {
@@ -499,6 +638,7 @@ pub async fn answer(
     }
     let registry = register_default_interceptors(Registry::new(), &mut media)?;
     let (tx, rx) = oneshot::channel();
+    let (peer_stop, mut peer_stop_rx) = watch::channel(false);
     let control = ControlSession::new();
     let controller = crate::adaptive::AdaptiveController::new(settings, mode);
     let (status_tx, status_rx) = watch::channel(controller.current());
@@ -509,12 +649,23 @@ pub async fn answer(
         .with_interceptor_registry(registry)
         .with_data_channel_send_buffer_limit(CONTROL_MESSAGE_MAX_BYTES)
         .with_handler(Arc::new(Handler {
+            monitor: runtime.monitor.clone(),
+            session_id,
+            peer_stop,
             gathered: tokio::sync::Mutex::new(Some(tx)),
             control: Arc::downgrade(&control),
         }))
         .with_udp_addrs(vec![format!("{lan_ip}:0")])
         .build()
         .await?;
+    let mut cleanup = NegotiationCleanup {
+        pc: Some(pc),
+        capture: streams.shutdown.clone(),
+        control: control.clone(),
+        runtime: runtime.clone(),
+        session_id,
+    };
+    let pc = cleanup.pc.as_ref().unwrap();
     let track = Arc::new(TrackLocalStaticSample::new(
         Instant::now(),
         MediaStreamTrack::new(
@@ -572,7 +723,13 @@ pub async fn answer(
         .await
         .context("missing local answer")?;
     let sdp = local.sdp;
-    tokio::spawn(async move {
+    let pc = cleanup.pc.take().unwrap();
+    let mut stop = runtime.stop.subscribe();
+    let monitor = runtime.monitor.clone();
+    monitor.update_session(session_id, |session| session.audio_active = audio_available);
+    capture_lease.0.take();
+    runtime.spawn(async move {
+        let capture_shutdown = streams.shutdown;
         let controller_task = ChannelTask(tokio::spawn(run_controller(
             controller,
             Arc::clone(&control),
@@ -580,6 +737,7 @@ pub async fn answer(
             streams.applied,
             metrics_rx,
             status_tx,
+            (monitor.clone(), session_id),
         )));
         let status_task = ChannelTask(tokio::spawn(publish_status(
             Arc::clone(&control),
@@ -588,25 +746,37 @@ pub async fn answer(
         let audio_task = if let (Some((audio_track, audio_sender)), Some(audio_frames)) =
             (audio_track_and_sender, streams.audio)
         {
-            Some(tokio::spawn(async move {
+            Some(ChannelTask(tokio::spawn(async move {
                 if let Err(err) = stream_audio(audio_track, audio_sender, audio_frames).await {
                     tracing::warn!("audio stream stopped: {err:#}");
                 }
-            }))
+            })))
         } else {
             None
         };
-        if let Err(err) = stream(track, sender, streams.video, credential_digest, metrics_tx).await
-        {
-            tracing::warn!("stream stopped: {err:#}");
-        }
-        if let Some(task) = audio_task {
-            task.abort();
-        }
+        let result = tokio::select! {
+            result = stream(track, sender, streams.video, credential_digest, metrics_tx, monitor.clone(), session_id) => result,
+            _ = crate::monitor::cancelled(&mut stop) => Ok(()),
+            _ = crate::monitor::cancelled(&mut peer_stop_rx) => Ok(()),
+        };
+        capture_shutdown.stop();
+        drop(audio_task);
+        monitor.update_session(session_id, |session| {
+            session.state = match &result {
+                Ok(()) => match &session.state {
+                    crate::monitor::SessionState::Error(error) => crate::monitor::SessionState::Error(error.clone()),
+                    _ => crate::monitor::SessionState::Closed,
+                },
+                Err(error) => crate::monitor::SessionState::Error(format!("{error:#}")),
+            };
+            session.browser_telemetry = None;
+        });
+        if let Err(err) = result { tracing::warn!("stream stopped: {err:#}"); }
         drop(controller_task);
         drop(status_task);
         control.stop().await;
         let _ = pc.close().await;
+        capture_shutdown.wait().await;
     });
     Ok((sdp, audio_available))
 }
@@ -617,6 +787,8 @@ async fn stream(
     mut frames: tokio::sync::mpsc::Receiver<crate::capture::EncodedFrame>,
     credential_digest: String,
     metrics: watch::Sender<Option<crate::adaptive::HostMetrics>>,
+    monitor: crate::monitor::Monitor,
+    session_id: u64,
 ) -> Result<()> {
     let payload = sender
         .get_parameters()
@@ -650,6 +822,9 @@ async fn stream(
             last_credential_check = Instant::now();
         }
         // Latest-only diagnostics never block media or discard encoded frames.
+        monitor.update_session(session_id, |session| {
+            session.host_metrics = Some(frame.metrics.clone())
+        });
         metrics.send_replace(Some(frame.metrics));
         track
             .sample_writer(ssrc, payload)

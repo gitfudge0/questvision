@@ -2,6 +2,9 @@ mod adaptive;
 mod audio;
 mod capture;
 mod config;
+mod gui;
+mod macos_permissions;
+mod monitor;
 mod quality;
 mod rtc;
 mod security;
@@ -33,6 +36,8 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Start,
+    /// Open the native host dashboard with an embedded runtime.
+    Gui,
     Doctor,
     Displays,
     Config,
@@ -64,6 +69,16 @@ enum VirtualCommand {
     Create,
 }
 
+fn resolve_command(command: Option<Command>) -> Command {
+    command.unwrap_or({
+        if cfg!(target_os = "macos") {
+            Command::Gui
+        } else {
+            Command::Start
+        }
+    })
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -82,8 +97,12 @@ async fn main() -> Result<()> {
         config.audio = true;
     }
     config.validate()?;
-    match cli.command.unwrap_or(Command::Start) {
+    match resolve_command(cli.command) {
         Command::Start => server::serve(config).await?,
+        Command::Gui => {
+            let host = gui::run(config, tokio::runtime::Handle::current())?;
+            host.shutdown().await;
+        }
         Command::Doctor => doctor(&config),
         Command::Displays => println!(
             "System-selected primary display. Linux portals may require choosing a monitor when streaming starts."
@@ -255,4 +274,26 @@ fn devices_command(config: &mut Config, action: Option<DeviceCommand>) -> Result
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn no_subcommand_uses_the_platform_default() {
+        let cli = Cli::try_parse_from(["questdisplay"]).unwrap();
+        let command = resolve_command(cli.command);
+        if cfg!(target_os = "macos") {
+            assert!(matches!(command, Command::Gui));
+        } else {
+            assert!(matches!(command, Command::Start));
+        }
+    }
+
+    #[test]
+    fn explicit_start_selects_the_cli_host() {
+        let cli = Cli::try_parse_from(["questdisplay", "start"]).unwrap();
+        assert!(matches!(resolve_command(cli.command), Command::Start));
+    }
 }

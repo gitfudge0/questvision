@@ -1,19 +1,14 @@
-use crate::quality::{ADAPTIVE_TIER_CANDIDATES, StreamSettings};
+use crate::quality::StreamSettings;
 use std::time::{Duration, Instant};
 
 pub const TELEMETRY_VERSION: u8 = 1;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AdaptationMode {
+    #[default]
     Adaptive,
     Fixed,
-}
-
-impl Default for AdaptationMode {
-    fn default() -> Self {
-        Self::Adaptive
-    }
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -99,7 +94,6 @@ pub struct ControllerPolicy {
     pub processing_frame_budget_ratio: f64,
     pub queue_frame_budget_ratio: f64,
     pub frame_age_budget_ratio: f64,
-    pub tiers: &'static [StreamSettings],
 }
 
 pub const PROVISIONAL_POLICY: ControllerPolicy = ControllerPolicy {
@@ -119,7 +113,6 @@ pub const PROVISIONAL_POLICY: ControllerPolicy = ControllerPolicy {
     processing_frame_budget_ratio: 0.90,
     queue_frame_budget_ratio: 1.0,
     frame_age_budget_ratio: 2.0,
-    tiers: ADAPTIVE_TIER_CANDIDATES,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

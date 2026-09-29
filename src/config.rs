@@ -49,6 +49,19 @@ pub fn load() -> Result<Config> {
     Ok(value)
 }
 
+/// Serialize dashboard and pairing writes within this host process and preserve
+/// fields owned by the other caller. Runtime settings remain a separate snapshot.
+pub fn update(change: impl FnOnce(&mut Config) -> Result<()>) -> Result<Config> {
+    static WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = WRITES
+        .lock()
+        .map_err(|_| anyhow::anyhow!("configuration write lock poisoned"))?;
+    let mut config = load()?;
+    change(&mut config)?;
+    config.save()?;
+    Ok(config)
+}
+
 impl Config {
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!((1..=240).contains(&self.fps), "FPS must be 1..=240");

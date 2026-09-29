@@ -21,7 +21,12 @@ The optional Makefile requires GNU Make, including the version shipped with macO
 make                                  # Show all targets
 make release                          # Build the optimized binary
 make app                              # Build a local macOS app bundle
-make run ARGS='--audio --port 48000'   # Start the optimized host (app on macOS)
+make run                              # Open the dashboard on macOS; start the host elsewhere
+make gui                              # Open the optimized GPUI dashboard
+make host-run ARGS='--audio --port 48000' # Start the optimized CLI host
+make app-run                          # Open the signed macOS GPUI dashboard
+make app-host-run                     # Start the signed macOS CLI host
+make gui-dev                          # Open the debug GPUI dashboard directly
 make dev                              # Start the debug host
 make doctor                           # Run diagnostics
 make benchmark PRESET=performance      # Capture and encode real frames
@@ -30,7 +35,9 @@ make verify                           # Check formatting, lint, test, build rele
 
 `ARGS` passes extra arguments to the command, `PRESET` defaults to `balanced`, and `CARGO` can override the Cargo executable. `make verify` runs each check in order and stops on the first failure, even with `make -j verify`.
 
-On macOS, `make app` creates `target/release/Quest Display.app` with a copied release host and local ad-hoc signature. Set `CODE_SIGN_IDENTITY` to use an available signing identity. `make run` delegates to `make app-run`, which launches the bundle through LaunchServices and keeps pairing output in the interactive terminal. Ctrl-C stops the app launched by that command. `make dev` runs the debug host directly; on other platforms, `make run` runs the release host directly. See [macOS](macos.md) for signing and permission limitations.
+On macOS, `make app` creates `target/release/Quest Display.app` with a copied release executable and local ad-hoc signature. Set `CODE_SIGN_IDENTITY` to use an available signing identity. `make run`, `make gui`, and `make app-run` open the GPUI dashboard from this signed bundle through LaunchServices so macOS can identify Quest Display when screen recording permission is requested. Permission is requested when capture starts. `make host-run` and `make app-host-run` launch the packaged CLI host with the `start` command.
+
+The macOS app launcher requires an interactive terminal to relay output and handle Ctrl-C, which stops the app launched by that command. `make gui-dev` opens the debug dashboard directly, and `make dev` starts the debug CLI host directly. macOS can attribute permissions for these direct command-line launches to Terminal; use the packaged GUI targets when granting permission to Quest Display. On other platforms, `make run` and `make host-run` start the release CLI host, and `make gui` opens the release dashboard directly. See [macOS](macos.md) for signing and permission limitations.
 
 ## Adding a backend
 

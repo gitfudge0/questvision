@@ -1,6 +1,6 @@
 # Quest Display
 
-Quest Display is an experimental local display streamer. The host is a Rust process; the client is a web page. The intended connection is a computer and a Meta Quest on the same LAN, with video carried by WebRTC. It needs no cloud account or native Quest app.
+Quest Display is an experimental local display streamer. The host is a Rust process with a GPUI desktop dashboard and CLI; the client is a web page. The intended connection is a computer and a Meta Quest on the same LAN, with video carried by WebRTC. It needs no cloud account or native Quest app.
 
 **This repository is under active implementation. It is not yet a verified install-and-stream release for macOS, Windows, or Quest 3.** See [implementation status](docs/implementation-status.md) before trying it. Hardware encoding and remote input are not implemented. Optional Linux desktop audio reached same-host Chromium in a live test; human listening and Quest playback were not tested. Hyprland virtual-output management works on the tested host, but the browser cannot explicitly select that output. Experimental view-only WebXR code exists but has not been tested on a Quest. No Quest device test or glass-to-glass latency benchmark has been recorded.
 
@@ -21,6 +21,16 @@ cd questvision
 Audio is off by default. To request desktop audio, start the host with `questdisplay start --audio` (or `target/release/questdisplay start --audio` from a source build), then use the browser's audio button to enable sound after the track arrives. The host falls back to video only if native audio capture is unavailable. A test tone reached same-host Chromium through Opus; audible speaker output, Quest playback, and A/V synchronization remain unverified.
 
 The HTTPS page, pairing, Linux Wayland capture, and WebRTC playback worked in Chromium on the development host. After tuning, a 120-frame host benchmark measured 41.1 fps at 1152×720 Performance and 20.7 fps at 1728×1080 Balanced. In the final live browser smoke, the UI showed about 43 and 23 fps respectively. Neither mode has met the 60 fps goal. Quest 3, macOS, Windows, and fresh-machine setup remain unverified. There are no installers yet. The binary is not signed or notarized.
+
+## Desktop host dashboard
+
+Launch `cargo run -- gui` (or `make gui-dev`) from a desktop session. For an optimized build, use `target/release/questdisplay gui` or `make gui`. On Windows, run `.\target\release\questdisplay.exe gui`.
+
+The GPUI window embeds the HTTPS/WebRTC host in the same process. **Start host** displays the connection URL, QR code, and a private pairing code when a browser requests one. **Stop host** closes the listener and media sessions; closing the window also stops the host. A native screen picker already open during negotiation must be dismissed or completed before shutdown can finish because the capture library cannot interrupt its picker.
+
+Overview shows session state and host-confirmed quality settings. Devices lists and revokes paired browser IDs. Settings saves the existing listen address, port, audio, FPS, and bitrate fields; changes apply on the next host start. Diagnostics shows fresh per-session encode/queue timings and optional browser receive statistics. Unavailable feedback is labeled explicitly; network RTT and capture-delivery frame age are not glass-to-glass latency. No bearer credentials are displayed. The CLI `start` command keeps terminal pairing.
+
+GPUI is pinned to 0.2.2, with Wayland/X11 enabled on Linux and Metal shader compilation at runtime on macOS. See [building](docs/building.md) for desktop prerequisites and [implementation status](docs/implementation-status.md) for verification limits.
 
 ## How it is meant to work
 

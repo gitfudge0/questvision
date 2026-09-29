@@ -15,6 +15,7 @@ clap = { version = "4", features = ["derive"] }
 crossbeam-channel = "0.5"
 dirs = "6"
 fast_image_resize = "6.1.0"
+gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
 local-ip-address = "0.6"
 openh264 = "0.9.8"
 opus = "0.4"

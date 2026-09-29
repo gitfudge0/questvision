@@ -7,22 +7,70 @@ fail() {
 }
 
 [[ $(uname -s) == Darwin ]] || fail 'macOS app launching requires macOS.'
-[[ $# -ge 1 ]] || fail 'Usage: run-macos-app.sh <bundle.app> [host arguments...]'
-tty_path=$(tty) || fail 'App launching requires an interactive terminal for pairing.'
-[[ -t 0 && -t 1 && -t 2 ]] || fail 'App launching requires an interactive terminal for pairing.'
-bundle=$(CDPATH= cd -- "$1" && pwd -P) || fail 'The app bundle does not exist.'
+activate_only=false
+if [[ ${1-} == --activate-if-running ]]; then
+    activate_only=true
+    shift
+fi
+[[ $# -ge 1 ]] || fail 'Usage: run-macos-app.sh [--activate-if-running] <bundle.app> [command and arguments...]'
+requested_bundle=$1
 shift
-executable="$bundle/Contents/MacOS/questdisplay"
 bundle_id=io.github.gitfudge0.questdisplay
-[[ -f "$executable" && -x "$executable" ]] || fail 'The bundled host executable is missing.'
-[[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$bundle/Contents/Info.plist") == "$bundle_id" ]] || fail 'Unexpected app bundle identifier.'
 
 find_app() {
     /usr/bin/lsappinfo -nonames find "bundleid=$bundle_id"
 }
 
 app=$(find_app) || fail 'Could not inspect running apps.'
-[[ -z "$app" ]] || fail 'Quest Display is already running; stop it before launching another instance.'
+# Exit 3 tells the Makefile that it can build a fresh bundle. This also works
+# before the first build, when requested_bundle does not exist yet.
+if [[ -z "$app" && $activate_only == true ]]; then
+    exit 3
+fi
+
+bundle=$(CDPATH= cd -- "$requested_bundle" && pwd -P) || fail 'The app bundle does not exist.'
+executable="$bundle/Contents/MacOS/questdisplay"
+[[ -f "$executable" && -x "$executable" ]] || fail 'The bundled executable is missing.'
+[[ $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$bundle/Contents/Info.plist") == "$bundle_id" ]] || fail 'Unexpected app bundle identifier.'
+
+if [[ -n "$app" ]]; then
+    [[ $# -eq 1 && $1 == gui ]] || fail 'Quest Display is already running; stop it before changing its command or arguments.'
+    [[ $app =~ ^ASN:0x[[:xdigit:]]+-0x[[:xdigit:]]+:$ ]] || fail 'Could not identify a single running Quest Display app.'
+    path_info=$(/usr/bin/lsappinfo info -only executablepath "$app") || fail 'Could not inspect the running app executable.'
+    [[ $path_info == "\"CFBundleExecutablePath\"=\"$executable\"" ]] || fail 'Quest Display is running from another bundle; activate or stop that app first.'
+    pid_info=$(/usr/bin/lsappinfo info -only pid "$app") || fail 'Could not inspect the running app PID.'
+    [[ $pid_info =~ ^\"pid\"=([0-9]+)$ && ${BASH_REMATCH[1]} -gt 1 ]] || fail 'Could not identify the running app PID.'
+    app_pid=${BASH_REMATCH[1]}
+    # Activate the registered process directly, avoiding open's reopen event,
+    # which can time out while the existing app is handling a permission dialog.
+    if activation=$(/usr/bin/osascript -l JavaScript -e '
+ObjC.import("AppKit");
+function run(argv) {
+    var app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(Number(argv[0]));
+    if (app.isNil() || ObjC.unwrap(app.bundleIdentifier) !== argv[1] ||
+        ObjC.unwrap(app.executableURL.path) !== argv[2]) return false;
+    return app.activateWithOptions($.NSApplicationActivateAllWindows);
+}' "$app_pid" "$bundle_id" "$executable" 2>/dev/null) && [[ $activation == true ]]; then
+        printf '%s\n' 'Quest Display is already running; activated the existing app.'
+        exit 0
+    fi
+    if open_output=$(/usr/bin/open -a "$bundle" 2>&1); then
+        printf '%s\n' 'Quest Display is already running; activated the existing app.'
+        exit 0
+    fi
+    if [[ $open_output =~ error[[:space:]]+-1712([[:space:].]|$) ]]; then
+        # A timeout is harmless only while the same app is still registered.
+        current_pid=$(/usr/bin/lsappinfo info -only pid "$app") || fail 'Could not inspect the app after activation timed out.'
+        [[ $current_pid == "$pid_info" ]] || fail 'Quest Display exited while activation timed out.'
+        printf '%s\n' 'Quest Display is already running; activation timed out. Use its Dock icon to bring it forward.'
+        exit 0
+    fi
+    [[ -z "$open_output" ]] || printf '%s\n' "$open_output" >&2
+    fail 'Could not activate the running Quest Display app.'
+fi
+
+tty_path=$(tty) || fail 'App launching requires an interactive terminal for output and Ctrl-C handling.'
+[[ -t 0 && -t 1 && -t 2 ]] || fail 'App launching requires an interactive terminal for output and Ctrl-C handling.'
 
 tracked_asn=
 tracked_pid=

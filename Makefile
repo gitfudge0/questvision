@@ -1,9 +1,11 @@
 CARGO ?= cargo
 ARGS ?=
 PRESET ?= balanced
+# Keep the conditional launch recipe from executing during make -n.
+APP_MAKE = $(MAKE)
 
 .DEFAULT_GOAL := help
-.PHONY: help build release app app-run run dev doctor displays config devices benchmark check test fmt fmt-check lint verify clean
+.PHONY: help build release app app-run app-host-run gui gui-dev run host-run dev doctor displays config devices benchmark check test fmt fmt-check lint verify clean
 
 help:
 	@printf '%s\n' \
@@ -14,9 +16,13 @@ help:
 	  '  build       Build the debug binary' \
 	  '  release     Build the optimized binary' \
 	  '  app         Build a locally signed macOS app bundle' \
-	  '  app-run     Build and launch the macOS app with terminal pairing; accepts ARGS' \
-	  '  run         Start the optimized host (app bundle on macOS); accepts ARGS' \
+	  '  app-run     Build and open the signed macOS GPUI dashboard; accepts ARGS' \
+	  '  app-host-run Build and start the signed macOS CLI host; accepts ARGS' \
+	  '  run         Open the macOS dashboard; start the host elsewhere; accepts ARGS' \
+	  '  host-run    Start the optimized CLI host (app bundle on macOS); accepts ARGS' \
 	  '  dev         Start the debug host; accepts ARGS' \
+	  '  gui         Open the optimized GPUI dashboard (signed app on macOS); accepts ARGS' \
+	  '  gui-dev     Open the debug GPUI dashboard directly; accepts ARGS' \
 	  '  doctor      Run host diagnostics; accepts ARGS' \
 	  '  displays    List displays; accepts ARGS' \
 	  '  config      Show configuration; accepts ARGS' \
@@ -44,18 +50,43 @@ app:
 ifeq ($(shell uname -s),Darwin)
 run:
 	$(MAKE) app-run
+
+gui:
+	$(MAKE) app-run
+
+host-run:
+	$(MAKE) app-host-run
 else
 run:
+	$(CARGO) run --release -- start $(ARGS)
+
+gui:
+	$(CARGO) run --release -- gui $(ARGS)
+
+host-run:
 	$(CARGO) run --release -- start $(ARGS)
 endif
 
 app-run:
 	@test "$$(uname -s)" = Darwin || { printf '%s\n' 'make app-run requires macOS.' >&2; exit 1; }
+	@status=0; \
+	bash scripts/run-macos-app.sh --activate-if-running '$(CURDIR)/target/release/Quest Display.app' gui $(ARGS) || status=$$?; \
+	case $$status in \
+	  0) ;; \
+	  3) $(APP_MAKE) app && bash scripts/run-macos-app.sh '$(CURDIR)/target/release/Quest Display.app' gui $(ARGS) ;; \
+	  *) exit $$status ;; \
+	esac
+
+app-host-run:
+	@test "$$(uname -s)" = Darwin || { printf '%s\n' 'make app-host-run requires macOS.' >&2; exit 1; }
 	$(MAKE) app
 	bash scripts/run-macos-app.sh '$(CURDIR)/target/release/Quest Display.app' start $(ARGS)
 
 dev:
 	$(CARGO) run -- start $(ARGS)
+
+gui-dev:
+	$(CARGO) run -- gui $(ARGS)
 
 doctor:
 	$(CARGO) run --release -- doctor $(ARGS)
