@@ -3,131 +3,167 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#101511">
+  <meta name="theme-color" content="#20211f">
   <title>Quest Display</title>
   <style>
     :root {
       color-scheme: dark;
-      --bg: oklch(18% 0.014 155);
-      --panel: oklch(24% 0.015 155);
-      --panel-strong: oklch(29% 0.017 155);
-      --line: oklch(42% 0.017 155);
-      --text: oklch(94% 0.01 100);
-      --muted: oklch(72% 0.012 130);
-      --accent: oklch(82% 0.14 135);
-      --accent-ink: oklch(20% 0.03 135);
-      --warn: oklch(78% 0.14 70);
-      --error: oklch(72% 0.17 25);
-      font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+      --bg: #20211f;
+      --panel: #2b2c29;
+      --panel-strong: #373831;
+      --line: #ffffff12;
+      --text: #f1f1e8;
+      --muted: #adb0a5;
+      --accent: #e9d86a;
+      --accent-ink: #23251e;
+      --warn: #e3d7a5;
+      --error: #e5bea5;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
       font-synthesis: none;
     }
     * { box-sizing: border-box; }
-    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
-    body { min-height: 100dvh; overflow-x: hidden; }
+    [hidden] { display: none !important; }
+    html, body { margin: 0; min-height: 100%; background: #191a18; color: var(--text); }
+    body { min-height: 100dvh; padding: clamp(10px, 2vw, 28px); overflow-x: hidden; }
     button, select, input { font: inherit; }
     button, select { cursor: pointer; }
     button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible {
-      outline: 2px solid var(--accent); outline-offset: 3px;
+      outline: 3px solid var(--accent); outline-offset: 3px;
     }
-    button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity: .52; }
-    button { min-height: 46px; border-radius: 10px; border: 1px solid var(--line); color: var(--text); background: var(--panel-strong); padding: 10px 16px; }
-    button:hover:not(:disabled), select:hover:not(:disabled) { background: oklch(34% 0.019 155); }
+    button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity: .4; }
+    button { min-height: 44px; border-radius: 9px; border: 1px solid #ffffff1a; color: #e9ecdf; background: var(--panel-strong); padding: 10px 16px; font-size: 13px; line-height: 1.3; }
+    button:hover:not(:disabled), select:hover:not(:disabled) { background: #414238; }
     button:active:not(:disabled) { transform: translateY(1px); }
-    .primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
-    .primary:hover:not(:disabled) { background: oklch(89% 0.13 135); }
+    .primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+    .primary:hover:not(:disabled) { background: #f2e48d; }
     .quiet { background: transparent; }
     .danger { color: var(--error); }
-    .app { min-height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
-    .topbar { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 15px clamp(16px, 3vw, 44px); border-bottom: 1px solid var(--line); }
-    .brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
-    .brand-mark { position: relative; width: 30px; height: 26px; flex: 0 0 auto; border: 2px solid var(--accent); border-radius: 5px; transform: skewX(-8deg); }
-    .brand-mark::after { content: ""; position: absolute; width: 8px; height: 2px; background: var(--accent); left: 9px; bottom: -7px; }
-    .brand-name { font-size: clamp(17px, 2vw, 20px); font-weight: 760; letter-spacing: -.035em; white-space: nowrap; }
-    .brand-sub { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .16em; margin-top: 2px; }
-    .connection { display: flex; align-items: center; gap: 11px; min-width: 0; color: var(--muted); font-size: 13px; }
-    .light { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--line); box-shadow: 0 0 0 4px oklch(42% 0.017 155 / .15); }
-    .light[data-state="live"] { background: var(--accent); box-shadow: 0 0 0 4px oklch(82% 0.14 135 / .14); }
-    .light[data-state="busy"] { background: var(--warn); box-shadow: 0 0 0 4px oklch(78% 0.14 70 / .14); }
-    .light[data-state="error"] { background: var(--error); box-shadow: 0 0 0 4px oklch(72% 0.17 25 / .14); }
-    .stage { position: relative; min-height: 330px; display: grid; place-items: center; overflow: hidden; background: oklch(13% 0.011 155); }
-    .stage::before { content: ""; position: absolute; inset: 0; pointer-events: none; background-image: linear-gradient(oklch(80% 0.02 155 / .025) 1px, transparent 1px), linear-gradient(90deg, oklch(80% 0.02 155 / .025) 1px, transparent 1px); background-size: 48px 48px; mask-image: linear-gradient(to bottom, transparent, black 30%, black 70%, transparent); }
-    video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: oklch(10% 0.009 155); display: none; }
+    .app { width: min(100%, 1280px); margin: 0 auto; background: var(--bg); border: 1px solid var(--line); border-radius: 24px; box-shadow: 0 15px 35px #0003; overflow: hidden; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 19px 24px; border-bottom: 1px solid var(--line); }
+    .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+    .brand-mark { width: 23px; height: 23px; flex: 0 0 auto; background: var(--accent); clip-path: polygon(0 15%, 48% 15%, 48% 40%, 100% 15%, 100% 85%, 52% 85%, 52% 60%, 0 85%); }
+    .brand-name { font-size: 17px; font-weight: 550; letter-spacing: -.5px; white-space: nowrap; }
+    .brand-sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+    .connection { display: flex; align-items: center; gap: 7px; min-width: 0; color: #d4d6cb; font-size: 13px; }
+    .light { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #adada1; box-shadow: 0 0 0 4px #ffffff05; }
+    .light[data-state="live"] { background: var(--accent); }
+    .light[data-state="busy"] { background: #adada1; }
+    .light[data-state="error"] { background: #ddae8c; }
+    .stream-wrap { padding: 18px 18px 0; }
+    .stage { position: relative; min-height: 350px; display: grid; align-items: center; overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: #272925; }
+    .stage.is-playing { height: clamp(350px, 47vw, 620px); background: #11120f; }
+    video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #11120f; display: none; }
     .stage.is-playing video { display: block; }
-    .stage.is-playing::before { display: none; }
-    .welcome { z-index: 1; width: min(100% - 32px, 490px); margin: 32px auto; padding: clamp(22px, 4vw, 36px); border: 1px solid var(--line); border-radius: 18px; background: var(--panel); box-shadow: 0 20px 80px oklch(4% 0.01 155 / .32); }
+    .welcome { z-index: 1; width: min(100%, 680px); min-height: 350px; padding: 42px 48px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; }
     .stage.is-playing .welcome { display: none; }
-    .eyebrow { color: var(--accent); font: 700 11px ui-monospace, "SFMono-Regular", Consolas, monospace; text-transform: uppercase; letter-spacing: .16em; }
-    h1 { margin: 14px 0 12px; font-size: clamp(27px, 5vw, 39px); letter-spacing: -.055em; line-height: 1.09; font-weight: 730; }
-    .welcome p { margin: 0 0 22px; color: var(--muted); line-height: 1.55; max-width: 43ch; }
-    .step { font: 700 11px ui-monospace, "SFMono-Regular", Consolas, monospace; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: 9px; }
-    .pair-actions { display: flex; gap: 10px; align-items: stretch; }
-    .pair-actions input { width: 100%; min-width: 0; min-height: 50px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line); color: var(--text); background: var(--bg); font: 600 21px ui-monospace, "SFMono-Regular", Consolas, monospace; letter-spacing: .14em; }
-    .pair-actions input::placeholder { font-size: 14px; letter-spacing: .02em; font-weight: 400; color: var(--muted); }
+    .eyebrow { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1.6px; }
+    h1 { margin: 12px 0 0; font-size: clamp(26px, 3vw, 31px); letter-spacing: -1px; line-height: 1.2; font-weight: 450; }
+    .welcome p { margin: 12px 0 0; color: var(--muted); font-size: 14px; line-height: 1.55; max-width: 480px; }
+    #pair-ui { width: 100%; max-width: 480px; margin-top: 24px; }
+    .step { display: block; font-size: 13px; margin-bottom: 8px; }
+    .pair-actions { display: flex; gap: 8px; align-items: stretch; }
+    .pair-actions input { width: 100%; min-width: 0; min-height: 48px; padding: 0 14px; border-radius: 9px; border: 1px solid #ffffff29; color: var(--text); background: var(--bg); font-size: 15px; letter-spacing: 3px; }
+    .pair-actions input::placeholder { font-size: 13px; letter-spacing: 0; color: #a6a99d; }
+    .pair-actions input[aria-invalid="true"] { border-color: #d6a280; }
     .pair-actions button { white-space: nowrap; }
-    .help { margin-top: 13px; font-size: 12px; color: var(--muted); line-height: 1.5; }
-    .message { min-height: 21px; margin-top: 17px; color: var(--muted); font-size: 13px; line-height: 1.45; }
-    .message.error { color: var(--error); }
+    .help { margin-top: 10px; font-size: 12px; color: #aeb3a5; line-height: 1.5; }
+    .message { padding: 12px 14px; border: 1px solid #e9d86a25; background: #e9d86a0a; border-radius: 9px; font-size: 13px; color: #d8d4b4; line-height: 1.5; margin-top: 16px; max-width: 550px; }
+    .message:empty { display: none; }
+    .message.error { background: #dca17e0b; border-color: #dca17e30; color: var(--error); }
     .message.good { color: var(--accent); }
-    .play-gate { position: absolute; z-index: 2; display: none; max-width: min(90%, 360px); text-align: center; padding: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: 0 18px 65px oklch(4% 0.01 155 / .5); }
-    .play-gate.visible { display: block; }
-    .play-gate p { margin: 0 0 15px; color: var(--muted); }
-    .dock { display: grid; gap: 14px; padding: 17px clamp(16px, 3vw, 44px) max(17px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--bg); }
-    .dock-main { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 22px; }
-    .dock-left, .dock-right { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-    .field { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; white-space: nowrap; }
-    select { min-height: 46px; min-width: 145px; max-width: min(44vw, 250px); padding: 9px 34px 9px 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--panel-strong); }
-    .mini-stats { display: flex; align-items: baseline; gap: 19px; white-space: nowrap; }
-    .mini-stats span { display: inline-flex; align-items: baseline; gap: 5px; font: 650 13px ui-monospace, "SFMono-Regular", Consolas, monospace; }
-    .mini-stats small { color: var(--muted); font: 11px "Avenir Next", "Segoe UI", system-ui, sans-serif; }
-    details { border-top: 1px solid var(--line); padding-top: 12px; }
-    summary { width: fit-content; min-height: 40px; display: flex; align-items: center; cursor: pointer; color: var(--muted); font-size: 13px; }
+    .live-message { max-width: none; }
+    #retry-button { margin-top: 12px; }
+    .play-gate { position: absolute; z-index: 2; inset: 0; display: none; align-items: center; justify-content: center; padding: 24px; background: #151610cc; }
+    .play-gate.visible { display: flex; }
+    .play-gate-inner { max-width: 400px; text-align: center; padding: 24px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: 0 18px 65px #0006; }
+    .play-gate h2 { margin: 0 0 10px; font-size: 19px; font-weight: 500; }
+    .play-gate p { margin: 0 0 17px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .dock { padding: 18px 22px max(22px, env(safe-area-inset-bottom)); }
+    .dock-main { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 18px; }
+    .dock-left { display: flex; flex-wrap: wrap; align-items: end; gap: 24px; }
+    .dock-right { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .field { display: grid; gap: 7px; color: var(--muted); font-size: 12px; min-width: 0; }
+    select { min-height: 44px; min-width: 140px; max-width: 100%; padding: 9px 32px 9px 12px; border: 1px solid #ffffff15; border-radius: 8px; color: var(--text); background: #31322c; font-size: 13px; }
+    #display-select { max-width: 270px; }
+    .mini-stats { display: flex; gap: 22px; padding-bottom: 5px; }
+    .mini-stats span { display: block; }
+    .mini-stats strong { font-size: 22px; font-weight: 450; line-height: 1.2; letter-spacing: -.8px; display: block; font-variant-numeric: tabular-nums; }
+    .mini-stats small { color: #a8ad9f; font-size: 11px; display: block; margin-top: 5px; }
+    .details-grid { display: grid; grid-template-columns: 1fr 1.3fr; gap: 12px; margin-top: 18px; }
+    .card { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+    .card h2 { font-size: 14px; font-weight: 500; margin: 0 0 14px; }
+    .quality { display: none; }
+    .quality.visible { display: block; }
+    .quality.visible ~ .quality-unavailable { display: none; }
+    .quality-unavailable { padding: 12px 0; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .presets { display: flex; background: var(--bg); padding: 4px; border: 0; border-radius: 9px; gap: 3px; margin: 0 0 15px; min-width: 0; }
+    .presets label { position: relative; flex: 1; min-width: 0; }
+    .presets input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+    .presets span { display: flex; align-items: center; justify-content: center; min-height: 40px; padding: 8px 4px; font-size: 12px; text-align: center; color: #b4b7aa; border-radius: 6px; cursor: pointer; }
+    .presets input:checked + span { background: #3c3d34; color: #f7edb7; }
+    .presets input:focus-visible + span { outline: 3px solid var(--accent); outline-offset: 2px; }
+    .presets input:disabled + span { opacity: .4; cursor: not-allowed; }
+    .quality-fields { display: flex; gap: 9px; flex-wrap: wrap; }
+    .quality-fields .field { flex: 1; min-width: 96px; }
+    .quality-fields select { width: 100%; min-width: 0; padding-left: 9px; }
+    .quality-note { margin-top: 12px; }
+    .mode-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 15px; }
+    .mode-line h2 { margin: 0; }
+    .mode-line .field { display: flex; align-items: center; gap: 8px; }
+    .mode-line select { min-width: 110px; }
+    .adaptation-readouts { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 0; }
+    .adaptation-readouts div, .diagnostics div { min-width: 0; }
+    .adaptation-readouts dt, .diagnostics dt { color: #a5aa9c; font-size: 12px; margin-bottom: 4px; }
+    .adaptation-readouts dd, .diagnostics dd { margin: 0; font-size: 13px; line-height: 1.5; color: #e3e5d8; overflow-wrap: anywhere; }
+    .control-notice { margin: 15px 0 0; color: var(--warn); padding-top: 13px; border-top: 1px solid var(--line); font-size: 12px; line-height: 1.5; }
+    .xr-controls { display: none; margin-top: 14px; background: #2c2e27; border: 1px solid #e9d86a17; border-radius: 12px; padding: 16px; }
+    .xr-controls.visible { display: block; }
+    .xr-controls h2 { margin: 0 0 12px; color: var(--accent); font-size: 13px; font-weight: 500; }
+    .xr-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .xr-controls .hint { margin: 12px 0 0; color: #a5ac9b; font-size: 12px; line-height: 1.5; }
+    .xr-readout { min-width: 56px; color: #c9ccbb; font-size: 12px; text-align: center; font-variant-numeric: tabular-nums; }
+    details { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+    summary { width: fit-content; min-height: 44px; display: flex; align-items: center; gap: 9px; cursor: pointer; color: #bdc3b1; font-size: 13px; }
+    summary::before { content: "▸"; }
+    details[open] summary::before { content: "▾"; }
+    summary::-webkit-details-marker { display: none; }
     summary:hover { color: var(--text); }
-    .diagnostics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px 20px; padding: 12px 0 4px; }
-    .diagnostics div { min-width: 0; }
-    .diagnostics dt { color: var(--muted); font-size: 11px; margin-bottom: 5px; }
-    .diagnostics dd { margin: 0; font: 600 13px ui-monospace, "SFMono-Regular", Consolas, monospace; overflow-wrap: anywhere; }
-    .footnote { color: var(--muted); font-size: 11px; line-height: 1.5; margin: 5px 0 0; }
-    .quality { display: none; gap: 10px; flex-wrap: wrap; align-items: center; }
-    .quality.visible { display: flex; }
-    .quality label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
-    .quality select { min-width: 105px; }
-    .adaptation { display: flex; flex-wrap: wrap; align-items: start; gap: 14px 22px; border-top: 1px solid var(--line); padding-top: 14px; }
-    .adaptation .field { padding-top: 3px; }
-    .adaptation-readouts { flex: 1 1 520px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px 20px; margin: 0; }
-    .adaptation-readouts dt { color: var(--muted); font-size: 11px; margin-bottom: 5px; }
-    .adaptation-readouts dd { margin: 0; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
-    .control-notice { flex-basis: 100%; margin: 0; color: var(--warn); font-size: 12px; line-height: 1.5; }
-    .xr-controls { display: none; flex-wrap: wrap; align-items: center; gap: 9px; border-top: 1px solid var(--line); padding-top: 13px; }
-    .xr-controls.visible { display: flex; }
-    .xr-controls button { min-height: 44px; }
-    .xr-controls .hint { flex-basis: 100%; margin: 1px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
-    .xr-readout { min-width: 66px; color: var(--muted); font: 12px ui-monospace, "SFMono-Regular", Consolas, monospace; text-align: center; }
-    .xr-overlay { position: fixed; z-index: 10; inset: auto 12px max(12px, env(safe-area-inset-bottom)) 12px; display: none; justify-content: center; flex-wrap: wrap; gap: 8px; padding: 10px; border-radius: 13px; background: oklch(18% 0.014 155 / .92); }
+    .diagnostics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 10px 0 16px; }
+    .footnote { color: #aab2a0; font-size: 12px; line-height: 1.5; margin: 5px 0 0; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+    .xr-overlay { position: fixed; z-index: 10; inset: auto 12px max(12px, env(safe-area-inset-bottom)) 12px; display: none; justify-content: center; flex-wrap: wrap; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 13px; background: #20211feb; }
     .xr-overlay.active { display: flex; }
-    .xr-overlay button { min-height: 46px; }
     .xr-overlay [data-xr-action="exit"] { color: var(--error); }
-    .stage:fullscreen { background: oklch(7% 0.008 155); }
+    .stage:fullscreen { min-height: 100%; width: 100%; height: 100%; border: 0; border-radius: 0; background: #090a08; }
     .stage:fullscreen video { display: block; }
     .stage:fullscreen .welcome { display: none; }
     .stage:fullscreen:not(.is-playing) video { display: none; }
-    @media (max-width: 700px) {
-      .topbar { min-height: 64px; }
-      .brand-sub { display: none; }
-      .stage { min-height: 400px; }
-      .dock-main { align-items: stretch; }
-      .dock-left { width: 100%; }
-      .dock-left .field { flex: 1; }
-      .dock-left select { flex: 1; max-width: none; }
-      .dock-right { justify-content: space-between; width: 100%; }
-      .mini-stats { gap: 12px; }
-      .adaptation .field { width: 100%; }
-      .adaptation select { flex: 1; max-width: none; }
+    .stage:fullscreen .fullscreen-message { position: absolute; z-index: 3; inset: auto 20px 20px; display: block; max-width: none; }
+    @media (max-width: 900px) {
+      .details-grid { grid-template-columns: 1fr; }
+      .stream-wrap { padding: 12px 12px 0; }
+      .welcome { padding: 35px; }
+      .dock { padding: 16px; }
+      .diagnostics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
-    @media (max-width: 420px) {
+    @media (max-width: 560px) {
+      body { padding: 10px; }
+      .app { border-radius: 17px; }
+      .topbar { padding: 16px; }
+      .brand-name { font-size: 15px; }
+      .brand-sub { font-size: 10px; }
+      .connection { font-size: 11px; }
+      .stage, .welcome { min-height: 360px; }
+      .stage.is-playing { height: 350px; min-height: 350px; }
+      .welcome { padding: 25px; }
       .pair-actions { flex-direction: column; }
-      .connection { font-size: 12px; }
-      .mini-stats span:last-child { display: none; }
-      .dock-right button { padding-inline: 12px; }
+      .dock-left { gap: 18px; }
+      .mini-stats { gap: 19px; }
+      .dock-right { width: 100%; }
+      .dock-right button { flex: 1; }
+      .mode-line { flex-wrap: wrap; }
+      .adaptation-readouts { grid-template-columns: 1fr; }
+      .diagnostics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
   </style>
@@ -138,6 +174,7 @@
       <div class="brand"><span class="brand-mark" aria-hidden="true"></span><div><div class="brand-name">Quest Display</div><div class="brand-sub">Local screen stream</div></div></div>
       <div class="connection" role="status" aria-live="polite"><span class="light" id="status-light"></span><span id="status-text">Starting</span></div>
     </header>
+    <div class="stream-wrap">
     <section class="stage" id="stage" aria-label="Desktop stream">
       <video id="video" autoplay playsinline muted aria-label="Remote desktop"></video>
       <div class="welcome" id="welcome">
@@ -145,23 +182,38 @@
         <h1 id="welcome-title">Your computer, in view.</h1>
         <p id="welcome-copy">Pair this browser with Quest Display on your computer to start streaming.</p>
         <div id="pair-ui">
-          <div class="step">Pair this browser</div>
-          <div class="pair-actions"><input id="pair-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="16" placeholder="Code shown on your computer" aria-label="Pairing code"><button id="pair-button" class="primary" type="button">Pair</button></div>
-          <div class="help">The code appears in the Quest Display terminal on your computer. Pairing grants this browser view access.</div>
+          <label class="step" for="pair-code">Pair this browser</label>
+          <div class="pair-actions"><input id="pair-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="16" placeholder="Code shown on your computer" aria-describedby="pair-help message"><button id="pair-button" class="primary" type="button">Pair</button></div>
+          <div class="help" id="pair-help">The code appears in the Quest Display app or terminal on your computer. Pairing grants this browser view access.</div>
         </div>
-        <div class="message" id="message" role="status" aria-live="polite"></div>
+        <div class="message" id="message"></div>
         <button id="retry-button" type="button" hidden>Try again</button>
       </div>
-      <div class="play-gate" id="play-gate"><p>The browser paused video playback.</p><button id="play-button" class="primary" type="button">Play stream</button></div>
+      <div class="play-gate" id="play-gate"><div class="play-gate-inner"><h2>The browser paused video playback.</h2><p>Allow video playback with a direct gesture.</p><button id="play-button" class="primary" type="button">Play stream</button></div></div>
+      <div class="message fullscreen-message" id="fullscreen-message" hidden></div>
+      <div class="sr-only" id="message-announcement" role="status" aria-live="polite" aria-atomic="true"></div>
     </section>
+    <div class="message live-message" id="live-message" hidden></div>
+    </div>
     <footer class="dock">
       <div class="dock-main">
-        <div class="dock-left"><label class="field" for="display-select">Display <select id="display-select" disabled><option>Waiting for pairing</option></select></label><div class="mini-stats" aria-label="Live connection statistics"><span><strong id="mini-fps">—</strong><small>fps</small></span><span><strong id="mini-bitrate">—</strong><small>Mbps</small></span><span><strong id="mini-rtt">—</strong><small>ms RTT</small></span></div></div>
+        <div class="dock-left"><label class="field" for="display-select">Display <select id="display-select" disabled><option>Waiting for pairing</option></select></label><div class="mini-stats" aria-label="Live connection statistics"><span><strong id="mini-fps">—</strong><small>fps measured</small></span><span><strong id="mini-bitrate">—</strong><small>Mbps received</small></span><span><strong id="mini-rtt">—</strong><small>ms RTT</small></span></div></div>
         <div class="dock-right"><button id="audio-button" type="button" hidden>Enable audio</button><button id="reconnect-button" type="button" disabled>Reconnect</button><button id="xr-button" type="button" hidden disabled>Enter XR</button><button id="fullscreen-button" class="primary" type="button" disabled>Fullscreen</button></div>
       </div>
-      <div class="quality" id="quality-controls"><label>Quality<select id="quality-select"><option value="balanced">Balanced</option><option value="performance">Performance</option><option value="quality">Quality</option></select></label><label>Frame rate<select id="fps-select"><option value="60">60 fps</option><option value="45">45 fps</option><option value="30">30 fps</option><option value="90">90 fps</option></select></label><label>Bitrate<select id="bitrate-select"><option value="auto">Auto</option><option value="10">10 Mbps</option><option value="20">20 Mbps</option><option value="35">35 Mbps</option><option value="50">50 Mbps</option></select></label></div>
-      <div class="adaptation"><label class="field" for="adaptation-mode">Mode <select id="adaptation-mode"><option value="adaptive">Adaptive</option><option value="fixed">Fixed</option></select></label><dl class="adaptation-readouts"><div><dt>Selected ceiling</dt><dd id="adaptive-ceiling">Balanced · 60 fps · 20 Mbps (unconfirmed)</dd></div><div><dt>Effective stream</dt><dd id="adaptive-effective">Awaiting host confirmation</dd></div><div><dt>Adaptation status</dt><dd id="adaptive-reason" role="status" aria-live="polite">Waiting for connection</dd></div><div><dt>Feedback</dt><dd id="adaptive-feedback">Browser and host feedback unconfirmed</dd></div></dl><p class="control-notice" id="control-notice" role="status" aria-live="polite" hidden></p></div>
-      <div class="xr-controls" id="xr-controls"><span class="eyebrow">Experimental XR screen</span><button type="button" data-xr-action="nearer" aria-label="Move XR screen closer">Closer</button><button type="button" data-xr-action="farther" aria-label="Move XR screen farther">Farther</button><span class="xr-readout" id="xr-distance">1.8 m</span><button type="button" data-xr-action="smaller" aria-label="Make XR screen smaller">Smaller</button><button type="button" data-xr-action="larger" aria-label="Make XR screen larger">Larger</button><span class="xr-readout" id="xr-scale">100%</span><button type="button" data-xr-action="curve">Curved</button><button type="button" data-xr-action="recenter">Recenter</button><p class="hint">View only. In XR, the controller trigger recenters the screen. Thumbstick left/right changes size; up/down changes distance. Browser support varies.</p></div>
+      <div class="details-grid">
+        <section class="card quality-card" aria-labelledby="quality-heading">
+          <h2 id="quality-heading">Stream quality</h2>
+          <div class="quality" id="quality-controls">
+            <select id="quality-select" aria-label="Quality preset" hidden><option value="balanced">Balanced</option><option value="performance">Performance</option><option value="quality">Quality</option></select>
+            <fieldset class="presets"><legend class="sr-only">Quality preset</legend><label><input type="radio" name="quality-preset" value="performance"><span>Performance</span></label><label><input type="radio" name="quality-preset" value="balanced" checked><span>Balanced</span></label><label><input type="radio" name="quality-preset" value="quality"><span>Quality</span></label></fieldset>
+            <div class="quality-fields"><label class="field" for="fps-select">Frame rate<select id="fps-select"><option value="60">60 fps</option><option value="45">45 fps</option><option value="30">30 fps</option><option value="90">90 fps</option></select></label><label class="field" for="bitrate-select">Bitrate<select id="bitrate-select"><option value="auto">Auto</option><option value="10">10 Mbps</option><option value="20">20 Mbps</option><option value="35">35 Mbps</option><option value="50">50 Mbps</option></select></label></div>
+            <p class="footnote quality-note">Selected values are ceilings, not measured playback.</p>
+          </div>
+          <p class="quality-unavailable" id="quality-availability">Checking host capabilities…</p>
+        </section>
+      <section class="card adaptation" aria-labelledby="adaptation-heading"><div class="mode-line"><h2 id="adaptation-heading">Stream adaptation</h2><label class="field" for="adaptation-mode">Mode <select id="adaptation-mode"><option value="adaptive">Adaptive</option><option value="fixed">Fixed</option></select></label></div><dl class="adaptation-readouts"><div><dt>Selected ceiling</dt><dd id="adaptive-ceiling">Balanced · 60 fps · 20 Mbps (unconfirmed)</dd></div><div><dt>Effective stream</dt><dd id="adaptive-effective">Awaiting host confirmation</dd></div><div><dt>Adaptation status</dt><dd id="adaptive-reason" role="status" aria-live="polite">Waiting for connection</dd></div><div><dt>Feedback</dt><dd id="adaptive-feedback">Browser and host feedback unconfirmed</dd></div></dl><p class="control-notice" id="control-notice" role="status" aria-live="polite" hidden></p></section>
+      </div>
+      <section class="xr-controls" id="xr-controls" aria-labelledby="xr-heading"><h2 id="xr-heading">Experimental XR screen</h2><div class="xr-line"><button type="button" data-xr-action="nearer" aria-label="Move XR screen closer">Closer</button><button type="button" data-xr-action="farther" aria-label="Move XR screen farther">Farther</button><span class="xr-readout" id="xr-distance">1.8 m</span><button type="button" data-xr-action="smaller" aria-label="Make XR screen smaller">Smaller</button><button type="button" data-xr-action="larger" aria-label="Make XR screen larger">Larger</button><span class="xr-readout" id="xr-scale">100%</span><button type="button" data-xr-action="curve">Curved</button><button type="button" data-xr-action="recenter">Recenter</button></div><p class="hint">View only. In XR, the controller trigger recenters the screen. Thumbstick left/right changes size; up/down changes distance. Browser support varies.</p></section>
       <details id="diagnostics"><summary>Connection diagnostics</summary><dl class="diagnostics"><div><dt>Codec</dt><dd id="diag-codec">—</dd></div><div><dt>Audio codec</dt><dd id="diag-audio-codec">Off</dd></div><div><dt>Resolution</dt><dd id="diag-resolution">—</dd></div><div><dt>Decode rate</dt><dd id="diag-fps">—</dd></div><div><dt>Received bitrate</dt><dd id="diag-bitrate">—</dd></div><div><dt>Round trip time</dt><dd id="diag-rtt">—</dd></div><div><dt>Packet loss</dt><dd id="diag-loss">—</dd></div><div><dt>Dropped frames</dt><dd id="diag-dropped">—</dd></div><div><dt>Jitter</dt><dd id="diag-jitter">—</dd></div><div><dt>Connection</dt><dd id="diag-connection">Idle</dd></div><div><dt>Secure context</dt><dd id="diag-secure">—</dd></div></dl><p class="footnote">RTT is network round trip time, not screen to eye latency. Capture and encode timings require host diagnostics.</p></details>
     </footer>
   </main>
@@ -197,11 +249,20 @@
     function setMessage(message, kind = '') {
       ui.message.textContent = message;
       ui.message.className = `message ${kind}`;
+      $('live-message').textContent = message;
+      $('live-message').className = `message live-message ${kind}`;
+      $('live-message').hidden = !message || !!document.fullscreenElement || !ui.stage.classList.contains('is-playing');
+      $('fullscreen-message').textContent = message;
+      $('fullscreen-message').className = `message fullscreen-message ${kind}`;
+      $('fullscreen-message').hidden = !message || !document.fullscreenElement;
+      $('message-announcement').textContent = message;
+      if (kind !== 'error') ui.pairCode.removeAttribute('aria-invalid');
     }
     function setWelcome(title, copy) { ui.title.textContent = title; ui.copy.textContent = copy; }
     function showPairing(show) { ui.pairUi.hidden = !show; }
     function setLive(live) {
       ui.stage.classList.toggle('is-playing', live);
+      $('live-message').hidden = !live || !!document.fullscreenElement || !ui.message.textContent;
       ui.fullscreen.disabled = !live || !document.fullscreenEnabled;
       ui.xrButton.disabled = !live || !state.xrSupported;
     }
@@ -247,12 +308,13 @@
         state.status = await request('/api/status', { timeout: 5000 });
         state.controls = state.status?.quality_controls === true;
         ui.quality.classList.toggle('visible', state.controls);
+        $('quality-availability').textContent = 'Host quality controls are not available. The stream uses the host configuration.';
         ui.audio.hidden = state.status?.audio !== true;
         ui.audio.disabled = state.status?.audio === true;
         ui.audio.textContent = state.status?.audio === true ? 'Waiting for audio' : 'Enable audio';
         textValue('diag-audio-codec', state.status?.audio === true ? 'Waiting' : 'Off');
         if (state.status?.codec) $('diag-codec').textContent = state.status.codec;
-      } catch (_) { state.controls = false; ui.quality.classList.remove('visible'); }
+      } catch (_) { state.controls = false; ui.quality.classList.remove('visible'); $('quality-availability').textContent = 'Host capabilities are unavailable. Stream controls appear when the host advertises support.'; }
     }
     async function startPairing() {
       setStatus('Waiting for pairing', 'busy');
@@ -262,7 +324,7 @@
         const result = await request('/api/pair/start', { method: 'POST', body: {} });
         if (!result?.request_id) throw new Error('The server did not return a pairing request.');
         state.requestId = result.request_id;
-        setMessage('Read the code in the Quest Display terminal and enter it here.');
+        setMessage('Read the code in the Quest Display app or terminal and enter it here.');
         ui.pairCode.focus();
       } catch (error) {
         setStatus('Host unavailable', 'error');
@@ -272,7 +334,7 @@
     }
     async function confirmPairing() {
       const code = ui.pairCode.value.replace(/\s+/g, '');
-      if (!code) { setMessage('Enter the code shown on your computer.', 'error'); ui.pairCode.focus(); return; }
+      if (!code) { ui.pairCode.setAttribute('aria-invalid', 'true'); setMessage('Enter the code shown on your computer.', 'error'); ui.pairCode.focus(); return; }
       ui.pairButton.disabled = true;
       setMessage('Checking code…');
       try {
@@ -287,6 +349,7 @@
         await afterPairing();
       } catch (error) {
         setStatus('Pairing failed', 'error');
+        ui.pairCode.setAttribute('aria-invalid', 'true');
         setMessage(formatError(error), 'error');
       } finally { ui.pairButton.disabled = false; }
     }
@@ -998,7 +1061,24 @@
       }
     }
 
+    const presetInputs = [...document.querySelectorAll('input[name="quality-preset"]')];
+    function syncPresets() {
+      for (const input of presetInputs) {
+        input.checked = input.value === ui.qualitySelect.value;
+        input.disabled = ui.qualitySelect.disabled;
+      }
+    }
+    for (const input of presetInputs) input.addEventListener('change', () => {
+      if (!input.checked || ui.qualitySelect.disabled) return;
+      ui.qualitySelect.value = input.value;
+      ui.qualitySelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    ui.qualitySelect.addEventListener('change', syncPresets);
+    new MutationObserver(syncPresets).observe(ui.qualitySelect, { attributes: true, attributeFilter: ['disabled'] });
+    syncPresets();
+
     ui.pairButton.addEventListener('click', confirmPairing);
+    ui.pairCode.addEventListener('input', () => ui.pairCode.removeAttribute('aria-invalid'));
     ui.pairCode.addEventListener('keydown', event => { if (event.key === 'Enter') confirmPairing(); });
     ui.retry.addEventListener('click', () => { ui.retry.hidden = true; state.token ? afterPairing() : startPairing(); });
     ui.reconnect.addEventListener('click', connect);
@@ -1033,7 +1113,7 @@
       try { if (document.fullscreenElement) await document.exitFullscreen(); else await ui.stage.requestFullscreen(); }
       catch (_) { setMessage('Fullscreen is unavailable in this browser. Use the browser window controls.', 'error'); }
     });
-    document.addEventListener('fullscreenchange', () => { ui.fullscreen.textContent = document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen'; });
+    document.addEventListener('fullscreenchange', () => { ui.fullscreen.textContent = document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen'; $('fullscreen-message').hidden = !document.fullscreenElement || !ui.message.textContent; $('live-message').hidden = !!document.fullscreenElement || !ui.stage.classList.contains('is-playing') || !ui.message.textContent; });
     ui.play.addEventListener('click', playVideo);
     window.addEventListener('online', () => { if (state.token && (!state.pc || state.pc.connectionState !== 'connected')) afterPairing(); });
     document.addEventListener('visibilitychange', () => { if (!document.hidden && state.token && (!state.pc || state.pc.connectionState === 'failed' || state.pc.connectionState === 'disconnected')) afterPairing(); });
@@ -1045,6 +1125,7 @@
         setStatus('Unsupported browser', 'error');
         setWelcome('WebRTC is unavailable.', 'Open this address in a current Quest Browser, Chrome, Edge, Firefox, or Safari.');
         showPairing(false);
+        $('quality-availability').textContent = 'Streaming is unavailable in this browser.';
         return;
       }
       if (!window.isSecureContext) setMessage('This page is not a secure context. Use the host HTTPS address.', 'error');

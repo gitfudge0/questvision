@@ -189,14 +189,17 @@ impl Render for Input {
         let paint_input = input.clone();
         div()
             .w_full()
+            .min_w_0()
+            .min_h(px(40.))
+            .flex_shrink_0()
             .border_1()
-            .rounded_md()
+            .rounded_lg()
             .border_color(rgb(if self.focus.is_focused(window) {
-                0x56cdb4
+                0xe9d86a
             } else {
-                0x35414a
+                0x555c4b
             }))
-            .bg(rgb(0x12191e))
+            .bg(rgb(0x24271f))
             .px_3()
             .py_2()
             .overflow_hidden()
@@ -321,7 +324,7 @@ impl Render for Input {
                                             bounds.bottom(),
                                         ),
                                     ),
-                                    rgba(0x56cdb440),
+                                    rgba(0xe9d86a40),
                                 ));
                             } else {
                                 window.paint_quad(fill(
@@ -332,7 +335,7 @@ impl Render for Input {
                                         ),
                                         size(px(1.), bounds.size.height),
                                     ),
-                                    rgb(0x56cdb4),
+                                    rgb(0xe9d86a),
                                 ));
                             }
                         }
